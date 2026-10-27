@@ -57,6 +57,7 @@ namespace SpatialOverview::Navigator {
         std::unordered_map<uint64_t, uint64_t>  g_focusStamps;
         uint64_t                                g_focusCounter = 0;
         std::vector<PHLWINDOWREF>               g_sessionOrder;
+        PHLWORKSPACEREF                         g_sessionWorkspace;
         std::unordered_set<uint32_t>            g_consumedKeys;
 
         wl_event_source*                        g_repeatTimer = nullptr;
@@ -83,6 +84,8 @@ namespace SpatialOverview::Navigator {
 
         bool isCandidate(const PHLWINDOW& window) {
             if (!Desktop::View::validMapped(window))
+                return false;
+            if (const auto WORKSPACE = g_sessionWorkspace.lock(); WORKSPACE && window->m_workspace != WORKSPACE)
                 return false;
             if (window->m_workspace && window->m_workspace->m_isSpecialWorkspace)
                 return false;
@@ -285,10 +288,11 @@ namespace SpatialOverview::Navigator {
         touch();
     }
 
-    void begin(const PHLWINDOW& focused) {
+    void begin(const PHLWINDOW& focused, const PHLWORKSPACE& workspace) {
         stopRepeat();
         const auto REVISION  = g_state.revision;
         g_state              = SState{};
+        g_sessionWorkspace  = workspace;
         g_state.open         = true;
         g_state.returnWindow = overviewWindow(focused);
         g_state.openedAt     = Time::steadyNow();
@@ -329,9 +333,19 @@ namespace SpatialOverview::Navigator {
         g_state.listRevealed = false;
         g_state.tuner        = false;
         g_sessionOrder.clear();
+        g_sessionWorkspace.reset();
         touch();
         if (g_tickTimer)
             wl_event_source_timer_update(g_tickTimer, 0);
+    }
+
+    void endWorkspace(const PHLWORKSPACE& workspace) {
+        if (workspace && g_sessionWorkspace.lock() == workspace)
+            end();
+    }
+
+    bool belongsToWorkspace(const PHLWORKSPACE& workspace) {
+        return g_sessionWorkspace.lock() == workspace;
     }
 
     std::string displayTitle(const PHLWINDOW& window) {
@@ -765,6 +779,7 @@ namespace SpatialOverview::Navigator {
         g_damage    = nullptr;
         g_state     = SState{};
         g_sessionOrder.clear();
+        g_sessionWorkspace.reset();
         g_fieldCache.clear();
         g_consumedKeys.clear();
     }

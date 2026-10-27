@@ -21,12 +21,41 @@ by yayuuu (see [Credits](#credits)).
 - **Your screens are one desk.** Side by side on the canvas as they stand on
   your desk, moving together: a window can sit across the seam, and dragging
   it from one screen to the other is one continuous move.
+- **Workspace-bound Canvas (opt-in).** Set `canvas.workspace_bound=true`,
+  `canvas.linked_screens=false`, and `canvas.places=false` to give every real
+  Hyprland workspace its own window set, camera, and remembered placement.
+  Switching workspaces keeps the outgoing Canvas renderer alive through
+  Hyprland's workspace transition, without retiling, resizing, or moving its
+  clients. The shell uses slide workspace transitions, and Canvas clients
+  preserve Hyprland's animated workspace opacity in both directions. The moving
+  plane is the monitor-sized view through the saved camera, not the infinite
+  Canvas: surfaces, borders and shadows are clipped to that translated view.
+  Off-camera clients cannot slide into a different or empty native workspace.
+  Native clients, pinned windows, special workspaces and layers keep their
+  native rendering and damage tracking outside that clip. Returning
+  resumes Canvas at its saved camera with the navigation HUD closed by default.
+  Set `canvas.remember_overview=true` to instead restore the workspace's
+  previous overview zoom, camera, search and selected live client. This is
+  compositor-session state, independent of `remember_layout`; explicit Canvas
+  disable and plugin unload clear it. Inactive workspaces never retain HUD input
+  ownership. Fast reversals reuse the retained renderer rather than allocating
+  another one.
+  Once the native transition settles, inactive renderers are released. Explicitly
+  disabling Canvas or unloading the plugin restores the saved native layout.
+  No windows are reassigned to follow a monitor.
+  Overview chrome fades with the native workspace's visible fraction and alpha,
+  using the existing slide rather than a second animation. Selected outlines
+  move and clip with their clients. The outgoing renderer keeps only its last
+  visual HUD frame while live search/input ownership ends immediately; incoming
+  and outgoing overlays compose in the native pass, not one shared shader slot.
 - **Type to find.** `SUPER + CTRL + G` zooms out with a search bar already
   listening. Type part of a title or app name and the camera glides to the
   best match; `Enter` lands on it at full size, `Esc` takes you back.
 - **Keyboard first.** Jump to the nearest window in any direction, nudge
   windows around, bring a window to where you are, frame one or fit them all,
   tidy everything up by app, undo and redo.
+- **Choose a Hyprland layout.** `SUPER + F1` dwindle, `F2` scrolling, `F3`
+  master and `F4` monocle on the current regular workspace.
 - **Recent windows.** `ALT + TAB` flips between windows most recently used
   first; hold `ALT` to see the list.
 - **Fill or go fullscreen.** `SUPER + T` makes a window fill its screen and puts
@@ -144,6 +173,7 @@ Everything can also be set in `~/.config/hypr/spatialoverview.lua` (then
 | Setting | Effect |
 | --- | --- |
 | `canvas.desktop_mode` | Enable the shared infinite-window desktop |
+| `canvas.workspace_bound` | Scope Canvas to the active real workspace; requires `desktop_mode=true`, `linked_screens=false`, and `places=false`. Canvas mode stays at 100% until the separate HUD toggle. |
 | `canvas.linked_screens` | Screens show adjacent parts of the canvas and move together (default); off: each screen is its own camera |
 | `canvas.places` | Experimental, off by default: the workspace keys go to places on the canvas and take windows there |
 | `canvas.initial_zoom` | Camera zoom when desktop mode opens |
@@ -153,7 +183,8 @@ Everything can also be set in `~/.config/hypr/spatialoverview.lua` (then
 | `canvas.direct_input` | Forward input into transformed Wayland windows |
 | `canvas.hover_focus` | Activate a transformed window when the pointer enters it |
 | `canvas.persistent` | Keep the canvas renderer active at 100% zoom instead of returning to workspace rendering |
-| `canvas.minimap_*` | Configure the undistorted navigation-mode minimap size, margin, and opacity |
+| `canvas.minimap_*` | Configure the navigation-mode minimap size, margin, and opacity |
+| `canvas.minimap_rounding` | Corner radius in logical pixels (default 14); zero squares the panel, markers, viewport and arrange control in both flat and lens rendering |
 | `canvas.arrange_context_grouping` | Prefer shared local title/app context before falling back to app categories |
 | `canvas.arrange_size_similarity` | Relative threshold for treating window sizes as equivalent |
 | `canvas.arrange_resize_limit` | Maximum relative resize applied to any window by smart arrangement |
@@ -175,11 +206,15 @@ Everything can also be set in `~/.config/hypr/spatialoverview.lua` (then
 | `canvas.background_dim` | Dark overlay behind the grid and windows in navigation mode |
 | `canvas.snap_enabled` / `snap_size` | Snap free window placement to the canvas grid, and its step in pixels |
 | `canvas.remember_layout` | Remember window positions and cameras across restarts and reopenings |
+| `canvas.remember_overview` | Restore workspace-bound overview zoom, camera, search and selection on return. Session only; default `false`. Fresh Canvas activation still starts with the HUD closed. |
 | `navigator.enabled` | Type-to-search palette in the zoomed-out canvas |
+| `navigator.auto_open` | Open that palette automatically on Canvas entry (default: `true`) |
 | `navigator.labels` | Window titles on the map |
 | `navigator.dim_unmatched` | How far windows that do not match the search recede |
 | `navigator.pointer` | Click lands, drag moves or pans, wheel zooms; off keeps direct app input while zoomed out |
 | `navigator.accent` | HUD accent for the selected row, caret, key names and outlines: `#rrggbb`, a preset name (`orange`, `amber`, `yellow`, `lime`, `green`, `mint`, `teal`, `cyan`, `sky`, `blue`, `indigo`, `violet`, `purple`, `magenta`, `pink`, `red`, `white`), or `auto` to follow the active border |
+| `navigator.colors.panel` / `card` / `edge` | Native Hyprland colors for HUD surfaces and outlines; the minimap and canvas dim overlays share the panel color, minimap outlines use edge |
+| `navigator.colors.text` / `text_dim` / `text_faint` | Native Hyprland colors for primary, secondary and tertiary text; the grid and inactive minimap markers use `text_dim` |
 | `navigator.mono_font` | The HUD's typeface (monospace, set in uppercase) |
 | `wallpaper` / `blur` / `blur_strength` | Sharp-at-rest canvas backdrop and navigation-mode blur blend |
 | `distortion.edge_blur` / `edge_blur_start` | Lens blur toward the screen edges, and where it begins (0 center, 1 corners) |
@@ -197,17 +232,69 @@ Everything can also be set in `~/.config/hypr/spatialoverview.lua` (then
 | `navigator.search_height` / `search_border` / `search_border_opacity` / `search_border_color` / `search_glow` | The search field |
 | `navigator.tuning_file` | Where the live tuner saves (default `$XDG_CONFIG_HOME/hypr/spatialoverview-tuning.lua`) |
 
+Set both `navigator.rounding` and `canvas.minimap_rounding` to `0` for square
+HUD surfaces, labels, badges, minimap markers and controls. Color roles accept
+native `rgb(...)` and `rgba(...)` values. Panel/card alpha combines with
+`navigator.panel_opacity`; minimap panel alpha additionally combines with
+`canvas.minimap_opacity`. Changing any color role invalidates cached HUD
+textures, including when the accent stays unchanged.
+
+Lua configs can replace the complete per-output color map after `hl.config`:
+
+```lua
+hl.plugin.spatialoverview.output_colors({
+  [output_name] = {
+    accent = "rgb(50ece0)",
+    panel = "rgb(0e0e0f)", card = "rgb(1b1b1c)", edge = "rgba(45697aaa)",
+    text = "rgb(ededed)", text_dim = "rgb(8f8f91)", text_faint = "rgb(5c5c5e)",
+  },
+})
+```
+
+`output_name` is an exact monitor name supplied by your configuration. All seven
+roles are required and use native Hyprland color syntax. A bad entry rejects the
+whole update. The map replaces previous assignments, including on config reload;
+`output_colors({})` removes them all. Unassigned outputs use `navigator.accent`
+and `navigator.colors` as their configured default. HUD, minimap, grid, labels
+and overlays resolve colors from the monitor being rendered, not the focused
+monitor. Texture and hit-test caches are output-scoped. `search_border_color =
+"accent"` follows that output's accent; an explicit color remains shared.
+
+Window selection, search-match and hover outlines follow each window's native
+rounding (including window rules); a square window keeps square outlines even
+when those outlines are expanded away from its edges.
+
 `navigator.accent` takes `#rrggbb`, a preset name (`orange`, `amber`, `yellow`,
 `lime`, `green`, `mint`, `teal`, `cyan`, `sky`, `blue`, `indigo`, `violet`,
 `purple`, `magenta`, `pink`, `red`, `white`), or `auto` for your theme's border
 color.
 
 For scripts and bindings, `hl.plugin.spatialoverview.canvas(...)` takes
+`workspace toggle|open|close` to change only the focused workspace's Canvas
+mode, and `hud toggle` to show or hide that workspace's navigation HUD. These
+actions require `canvas.workspace_bound=true`; the plugin owns this state, so
+bindings do not keep a separate monitor-based open table.
+
+`hl.plugin.spatialoverview.workspace_canvas_active()` takes no arguments and
+returns true only while the focused regular workspace's workspace-bound Canvas
+renderer is live and not closing. It returns false for special workspaces,
+fullscreen suspension, a renderer attached to another workspace, or no live
+renderer. Bindings can use it to route shared keys to Canvas actions while
+Canvas renders and to native Hyprland actions otherwise. The workspace state
+JSON keeps requested mode separate from live rendering: each
+`workspaces[]` entry's `canvas` is the logical enabled state, while
+`rendering` reports whether that workspace currently has the live renderer.
+Fullscreen can therefore leave `canvas: true` and `rendering: false`; rendering
+resumes when fullscreen ends.
+
 `search [text]`, `tune`, `fill`, `pin`, `go <place>|next|prev|back`,
 `send <place> [stay]`, `switch next|prev`, `fit`, `summon`, `zoom in|out`,
 `pan <dir>`, `nudge <dir>`, `undo`, `redo`, `arrange`, `frame`, `land`, `back`,
 `noop` (for keys that do nothing on the canvas) and `refresh`.
-`hyprctl spatialoverview` prints the canvases' state as JSON.
+`hyprctl spatialoverview` prints the canvases' state as JSON. Its `workspaces`
+array reports each real workspace's `id`, `name`, `active`, logical `canvas`
+mode, live `rendering` state, `monitor`, `navigating`, and independent
+two-number `view` state.
 
 How each key behaves on the canvas, and what the tests check, is in
 [docs/window-rules.md](docs/window-rules.md).

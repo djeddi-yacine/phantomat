@@ -12,6 +12,7 @@
 #include <hyprland/src/render/Framebuffer.hpp>
 #include <hyprland/src/render/types.hpp>
 #include <chrono>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -24,12 +25,23 @@
 class CMonitor;
 struct wl_event_source;
 
+namespace SpatialOverview {
+    bool workspaceCanvasEnabled(const PHLWORKSPACE& workspace);
+    void setWorkspaceCanvasEnabled(const PHLWORKSPACE& workspace, bool enabled);
+    void forgetWorkspaceCanvas(const PHLWORKSPACE& workspace);
+    void clearWorkspaceCanvasModes();
+    // Restore native layout while retaining each window's current fullscreen modes.
+    void restoreWorkspaceCanvasNative(const PHLWORKSPACE& workspace = {});
+}
+
 class CScrollOverview : public IOverview {
   public:
-    CScrollOverview(PHLWORKSPACE startedOn_, bool swipe = false, PHLMONITOR monitor = {});
+    CScrollOverview(PHLWORKSPACE startedOn_, bool swipe = false, PHLMONITOR monitor = {}, bool workspaceBoundCanvas = false);
     ~CScrollOverview() override;
 
     void         render() override;
+    void         renderWorkspaceTransition();
+    bool         ownsWorkspaceTransitionWindow(const PHLWINDOW& window) const;
     void         damage() override;
     void         requestInputFrame() override;
     void         markBlurDirty();
@@ -61,9 +73,15 @@ class CScrollOverview : public IOverview {
     float        overviewProgress() const;
     float        distortionProgress() const;
     bool         isCanvasDesktop() const;
+    bool         isWorkspaceBoundCanvas() const;
+    PHLWORKSPACE workspaceCanvas() const;
+    bool         canvasWindowInWorkspace(const PHLWINDOW& window) const;
+    void         closeForWorkspaceSwitch();
+    void         resumeAfterWorkspaceSwitch();
+    bool         restoreWorkspaceOverview(); // call after registering the workspace's renderer
     bool         isPersistentCanvas() const;
     bool         isCanvasNavigationActive() const;
-    void         toggleCanvasNavigation();
+    void         toggleCanvasNavigation(bool showNavigator = false);
     void         refreshCanvasSettings();
     bool         flightDeckAction(const std::string& action);
     bool         canvasPlaceAction(const std::string& action);
@@ -152,6 +170,7 @@ class CScrollOverview : public IOverview {
     void   renderCanvasBackgroundDim(PHLMONITOR monitor);
     void   renderCanvasGrid(PHLMONITOR monitor, size_t activeIdx, float workspacePitch, float renderScale);
     void   renderCanvasMinimap(PHLMONITOR monitor);
+    std::optional<CBox> canvasMinimapWorldBounds(PHLMONITOR monitor) const;
     void   renderExperimentChrome(PHLMONITOR monitor);
     bool   handleExperimentKey(uint32_t keysym, uint32_t mods);
     bool   handleExperimentClick(uint32_t button, uint32_t state, const Vector2D& rawLocal);
@@ -164,6 +183,8 @@ class CScrollOverview : public IOverview {
     void   followNavigatorSelection();
     bool   navigatorOwnsPointer() const;
     bool   showsNavigatorHud() const;
+    float  workspaceHudOpacity() const;
+    bool   navigatorFrameMatches(const PHLWINDOW& window) const;
     void   updateNavigatorHover();
     void   setCanvasCursor(const std::string& shape);
     void   leaveNavigatorPointer();
@@ -173,7 +194,7 @@ class CScrollOverview : public IOverview {
     void   renderNavigatorHud(PHLMONITOR monitor);
     CBox   canvasArrangeButtonBox() const;
     void   renderCanvasViewport(PHLMONITOR monitor, float renderScale);
-    void   renderCanvasDesktopScene(PHLMONITOR monitor, float renderScale, const Time::steady_tp& now);
+    void   renderCanvasDesktopScene(PHLMONITOR monitor, float renderScale, const Time::steady_tp& now, bool includeScreenFixedWindows);
     void   renderChromeLayers(PHLMONITOR monitor, const Time::steady_tp& now);
     bool   hasVisiblePrecomputedBlurWindow(PHLMONITOR monitor, size_t activeIdx, float workspacePitch, float renderScale) const;
     void   renderWindowLive(PHLMONITOR monitor, PHLWINDOW window, const CBox& windowBox, float renderScale, const Time::steady_tp& now, const CBox* workspaceBox = nullptr,
@@ -214,6 +235,7 @@ class CScrollOverview : public IOverview {
     void         zoomCanvasAt(const Vector2D& point, float requestedZoom, bool animate = false);
     bool         manageCanvasWindow(PHLWINDOW window, bool placeNew);
     void         ensureCanvasKeyboardFocus(PHLWINDOW window = {});
+    bool         workspaceCanvasSpecialActive() const;
     void         seedCanvasWindows();
     void         forwardCanvasPointerMotion(uint32_t timeMs = 0);
     bool         forwardCanvasPointerButton(const IPointer::SButtonEvent& event);
@@ -256,7 +278,8 @@ class CScrollOverview : public IOverview {
     void   emitFullscreenVisibilityState(PHLWINDOW window, bool hideFullscreen);
     void   applyInputConfigOverrides();
     void   restoreInputConfigOverrides();
-    void   transferSharedStateOwnership();
+    void   acquireSharedStateOwnership();
+    void   transferSharedStateOwnership(CScrollOverview* successor = nullptr);
     size_t activeWorkspaceIndex() const;
     bool   isSelectedWorkspace(const PHLWORKSPACE& workspace) const;
     void   sendOverviewFrameCallbacks(const Time::steady_tp& now);
@@ -388,6 +411,10 @@ class CScrollOverview : public IOverview {
     bool                                   sharedStateOwner = false;
 
     PHLWORKSPACE                     startedOn;
+    bool                             workspaceBoundCanvas = false;
+    bool                             workspaceSwitchClose = false;
+    struct SNavigatorFrame;
+    SP<SNavigatorFrame>              navigatorFrame; // visual-only; never retains Navigator input
 
     PHLANIMVAR<float>                scale;
     PHLANIMVAR<float>                transitionProgress;

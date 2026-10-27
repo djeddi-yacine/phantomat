@@ -28,8 +28,12 @@ uniform vec4 minimapWindows[MAX_MINIMAP_WINDOWS];
 uniform float minimapWindowDim[MAX_MINIMAP_WINDOWS]; // 0 keeps a marker at full emphasis
 uniform int minimapWindowCount;
 uniform int minimapFocusedIndex;
-uniform vec3 minimapActiveColor;
-uniform vec3 minimapInactiveColor;
+uniform vec4 minimapActiveColor;
+uniform vec4 minimapInactiveColor;
+uniform vec4 minimapPanelColor;
+uniform vec4 minimapOutlineColor;
+uniform float minimapRounding;
+uniform float minimapScale;
 uniform float minimapOpacity;
 uniform float minimapTransition;
 
@@ -69,6 +73,7 @@ vec2 screenPoint() {
 
 float roundedDistance(vec2 point, vec4 rect, float radius) {
     vec2 halfSize = rect.zw * 0.5;
+    radius = clamp(radius, 0.0, min(halfSize.x, halfSize.y));
     vec2 centered = point - (rect.xy + halfSize);
     vec2 delta = abs(centered) - halfSize + vec2(radius);
     return length(max(delta, vec2(0.0))) + min(max(delta.x, delta.y), 0.0) - radius;
@@ -97,36 +102,37 @@ vec4 composeMinimap(vec4 base) {
 
     vec2 point = screenPoint();
     vec4 color = base;
-    float panelRadius = max(6.0, min(minimapPanel.z, minimapPanel.w) * 0.075);
+    float panelRadius = minimapRounding;
     float panelMask = roundedMask(point, minimapPanel, panelRadius);
     if (panelMask > 0.0) {
-        color = blendOverlay(color, vec3(0.025, 0.030, 0.045), minimapOpacity * minimapTransition * panelMask);
+        color = blendOverlay(color, minimapPanelColor.rgb, minimapPanelColor.a * minimapOpacity * minimapTransition * panelMask);
 
         for (int i = 0; i < MAX_MINIMAP_WINDOWS; ++i) {
             if (i >= minimapWindowCount)
                 break;
             bool focused = i == minimapFocusedIndex;
-            float markerMask = roundedMask(point, minimapWindows[i], 3.0);
-            color = blendOverlay(color, focused ? minimapActiveColor : minimapInactiveColor,
-                                 (focused ? 0.92 : 0.58) * (1.0 - minimapWindowDim[i]) * minimapTransition * markerMask);
+            float markerMask = roundedMask(point, minimapWindows[i], min(3.0 * minimapScale, minimapRounding));
+            vec4 markerColor = focused ? minimapActiveColor : minimapInactiveColor;
+            color = blendOverlay(color, markerColor.rgb,
+                                 markerColor.a * (focused ? 0.92 : 0.58) * (1.0 - minimapWindowDim[i]) * minimapTransition * markerMask);
         }
 
-        float viewportRadius = 5.0;
+        float viewportRadius = min(5.0 * minimapScale, minimapRounding);
         float viewportFill = roundedMask(point, minimapViewport, viewportRadius);
-        color = blendOverlay(color, minimapActiveColor, 0.12 * minimapTransition * viewportFill);
+        color = blendOverlay(color, minimapActiveColor.rgb, minimapActiveColor.a * 0.12 * minimapTransition * viewportFill);
         float viewportBorder = roundedBorderMask(point, minimapViewport, viewportRadius, 2.0);
-        color = blendOverlay(color, minimapActiveColor, 0.95 * minimapTransition * viewportBorder);
+        color = blendOverlay(color, minimapActiveColor.rgb, minimapActiveColor.a * 0.95 * minimapTransition * viewportBorder);
 
         float panelBorder = roundedBorderMask(point, minimapPanel, panelRadius, 1.0);
-        color = blendOverlay(color, minimapInactiveColor, 0.50 * minimapTransition * panelBorder);
+        color = blendOverlay(color, minimapOutlineColor.rgb, minimapOutlineColor.a * 0.50 * minimapTransition * panelBorder);
     }
 
-    float buttonRadius = max(5.0, min(minimapArrangeButton.z, minimapArrangeButton.w) * 0.22);
+    float buttonRadius = min(10.0 * minimapScale, minimapRounding);
     float buttonMask = roundedMask(point, minimapArrangeButton, buttonRadius);
     if (buttonMask > 0.0) {
-        color = blendOverlay(color, vec3(0.025, 0.030, 0.045), minimapOpacity * minimapTransition * buttonMask);
+        color = blendOverlay(color, minimapPanelColor.rgb, minimapPanelColor.a * minimapOpacity * minimapTransition * buttonMask);
         float buttonBorder = roundedBorderMask(point, minimapArrangeButton, buttonRadius, 1.0);
-        color = blendOverlay(color, minimapInactiveColor, 0.65 * minimapTransition * buttonBorder);
+        color = blendOverlay(color, minimapOutlineColor.rgb, minimapOutlineColor.a * 0.65 * minimapTransition * buttonBorder);
 
         // Six small cells make the action recognizable as "arrange" without
         // relying on a font inside the compositor's final screen shader.
@@ -138,8 +144,8 @@ vec4 composeMinimap(vec4 base) {
         for (int row = 0; row < 3; ++row) {
             for (int column = 0; column < 2; ++column) {
                 vec2 pos = minimapArrangeButton.xy + inset + vec2(float(column) * (cell.x + gap.x), float(row) * (cell.y + gap.y));
-                float cellMask = roundedMask(point, vec4(pos, cell), 1.5);
-                color = blendOverlay(color, minimapActiveColor, 0.88 * minimapTransition * cellMask);
+                float cellMask = roundedMask(point, vec4(pos, cell), min(1.5 * minimapScale, minimapRounding));
+                color = blendOverlay(color, minimapActiveColor.rgb, minimapActiveColor.a * 0.88 * minimapTransition * cellMask);
             }
         }
     }

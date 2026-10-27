@@ -26,6 +26,9 @@ namespace SpatialOverview::Hud {
         STheme   g_theme;
         uint64_t g_themeFrame = std::numeric_limits<uint64_t>::max();
         uint64_t g_frame      = 0;
+        std::string g_currentMonitor;
+        std::string g_themeMonitor;
+        std::unordered_map<std::string, SOutputColors> g_outputColors;
 
         struct SCachedLabel {
             SLabel   label;
@@ -45,15 +48,20 @@ namespace SpatialOverview::Hud {
             };
             std::vector<CBox> panels; // texture-local
             std::vector<SRow> rows;
-        } g_palette;
+        };
+        std::unordered_map<std::string, SCachedPalette> g_palettes;
 
         struct SCachedChrome {
             std::string key;
             SChrome     chrome;
-        } g_chrome;
+        };
+        std::unordered_map<std::string, SCachedChrome> g_chromes;
 
-        SP<Render::ITexture> g_gridTile;
-        std::string          g_gridTileKey;
+        struct SCachedGridTile {
+            SP<Render::ITexture> texture;
+            std::string key;
+        };
+        std::unordered_map<std::string, SCachedGridTile> g_gridTiles;
 
         cairo_surface_t*     g_measureSurface = nullptr;
         cairo_t*             g_measure        = nullptr;
@@ -67,6 +75,10 @@ namespace SpatialOverview::Hud {
         CHyprColor withAlpha(CHyprColor color, float alpha) {
             color.a = alpha;
             return color;
+        }
+
+        double interfaceRadius(double radius, const STheme& theme) {
+            return theme.rounding <= 0.0 ? 0.0 : radius;
         }
 
         std::optional<CHyprColor> parseHex(std::string value) {
@@ -157,7 +169,7 @@ namespace SpatialOverview::Hud {
         void card(cairo_t* cr, double x, double y, double w, double h, double r, const STheme& theme) {
             roundedRect(cr, x, y, w, h, r);
             cairo_pattern_t* fill = cairo_pattern_create_linear(x, y, x + w, y + h);
-            const auto       LEFT = mix(theme.card, CHyprColor{1, 1, 1, theme.card.a}, 0.045F);
+            const auto       LEFT = mix(theme.card, withAlpha(theme.text, theme.card.a), 0.045F);
             cairo_pattern_add_color_stop_rgba(fill, 0, LEFT.r, LEFT.g, LEFT.b, LEFT.a);
             cairo_pattern_add_color_stop_rgba(fill, 1, theme.card.r, theme.card.g, theme.card.b, theme.card.a);
             cairo_set_source(cr, fill);
@@ -326,11 +338,8 @@ namespace SpatialOverview::Hud {
         // An app icon in a rounded well, or its category code when the app
         // ships no icon.
         void iconWell(cairo_t* cr, const PHLWINDOW& window, double x, double y, double size, double s, bool selected, const STheme& theme) {
-            roundedRect(cr, x, y, size, size, 8.0 * s);
-            if (selected)
-                cairo_set_source_rgba(cr, 0.03, 0.03, 0.03, 0.9);
-            else
-                cairo_set_source_rgba(cr, 1, 1, 1, 0.045);
+            roundedRect(cr, x, y, size, size, interfaceRadius(8.0 * s, theme));
+            setColor(cr, selected ? theme.onAccent : theme.text, selected ? 0.9F : 0.045F);
             cairo_fill(cr);
 
             const double INNER = std::round(size * 0.68);
@@ -561,10 +570,10 @@ namespace SpatialOverview::Hud {
             } else if (param.kind == Tuning::EKind::COLOR) {
                 // The accent is the theme's, already resolved (presets, auto).
                 const double SIZE = 18.0 * s, SX = right - SIZE;
-                roundedRect(cr, SX, MID - SIZE / 2.0, SIZE, SIZE, 4.0 * s);
+                roundedRect(cr, SX, MID - SIZE / 2.0, SIZE, SIZE, interfaceRadius(4.0 * s, theme));
                 setColor(cr, theme.accent);
                 cairo_fill_preserve(cr);
-                setColor(cr, selected ? theme.onAccent : CHyprColor{1.F, 1.F, 1.F, 0.35F});
+                setColor(cr, selected ? theme.onAccent : withAlpha(theme.text, 0.35F));
                 cairo_set_line_width(cr, 1.5 * s);
                 cairo_stroke(cr);
                 right = SX - 12.0 * s;
@@ -572,7 +581,7 @@ namespace SpatialOverview::Hud {
                 const double SW = 150.0 * s, SH = 4.0 * s, SX = right - SW;
                 const double F  = Tuning::fraction(param, VAL);
                 roundedRect(cr, SX, MID - SH / 2.0, SW, SH, SH / 2.0);
-                setColor(cr, selected ? withAlpha(theme.onAccent, 0.22F) : CHyprColor{1.F, 1.F, 1.F, 0.10F});
+                setColor(cr, selected ? withAlpha(theme.onAccent, 0.22F) : withAlpha(theme.text, 0.10F));
                 cairo_fill(cr);
                 if (F > 0.0) {
                     roundedRect(cr, SX, MID - SH / 2.0, std::max(SH, SW * F), SH, SH / 2.0);
@@ -625,6 +634,9 @@ namespace SpatialOverview::Hud {
                     accent = luminous(GRADIENT->m_colors.front());
             }
         }
+        const auto OUTPUTCOLORS = g_outputColors.find(g_currentMonitor);
+        if (OUTPUTCOLORS != g_outputColors.end())
+            accent = OUTPUTCOLORS->second.accent;
         accent.a        = 1.F;
         theme.accent    = accent;
         // Text on the accent is black or white, whichever contrasts more
@@ -632,12 +644,29 @@ namespace SpatialOverview::Hud {
         const auto  LINEAR    = [](float c) { return c <= 0.04045F ? c / 12.92F : std::pow((c + 0.055F) / 1.055F, 2.4F); };
         const float LUMINANCE = 0.2126F * LINEAR(accent.r) + 0.7152F * LINEAR(accent.g) + 0.0722F * LINEAR(accent.b);
         theme.onAccent        = (LUMINANCE + 0.05F) / 0.05F >= 1.05F / (LUMINANCE + 0.05F) ? CHyprColor{0.035F, 0.035F, 0.035F, 1.F} : CHyprColor{0.97F, 0.97F, 0.97F, 1.F};
-        theme.panel     = CHyprColor{0.055F, 0.055F, 0.058F, 0.94F};
-        theme.card      = CHyprColor{0.105F, 0.105F, 0.11F, 0.96F};
-        theme.edge      = CHyprColor{1.F, 1.F, 1.F, 0.065F};
-        theme.text      = CHyprColor{0.93F, 0.93F, 0.93F, 1.F};
-        theme.textDim   = CHyprColor{0.56F, 0.56F, 0.57F, 1.F};
-        theme.textFaint = CHyprColor{0.36F, 0.36F, 0.37F, 1.F};
+        const auto COLOR = [](const std::string& role) {
+            return CHyprColor{sc<uint64_t>(ScrollOverview::Config::getValue<Config::INTEGER>("plugin:spatialoverview:navigator:colors:" + role))};
+        };
+        auto PANELCOLOR     = COLOR("panel");
+        auto CARDCOLOR      = COLOR("card");
+        auto EDGECOLOR      = COLOR("edge");
+        auto TEXTCOLOR      = COLOR("text");
+        auto TEXTDIMCOLOR   = COLOR("text_dim");
+        auto TEXTFAINTCOLOR = COLOR("text_faint");
+        if (OUTPUTCOLORS != g_outputColors.end()) {
+            PANELCOLOR = OUTPUTCOLORS->second.panel;
+            CARDCOLOR = OUTPUTCOLORS->second.card;
+            EDGECOLOR = OUTPUTCOLORS->second.edge;
+            TEXTCOLOR = OUTPUTCOLORS->second.text;
+            TEXTDIMCOLOR = OUTPUTCOLORS->second.textDim;
+            TEXTFAINTCOLOR = OUTPUTCOLORS->second.textFaint;
+        }
+        theme.panel     = PANELCOLOR;
+        theme.card      = CARDCOLOR;
+        theme.edge      = EDGECOLOR;
+        theme.text      = TEXTCOLOR;
+        theme.textDim   = TEXTDIMCOLOR;
+        theme.textFaint = TEXTFAINTCOLOR;
         theme.font      = ScrollOverview::Config::getNavigatorMonoFont();
         if (theme.font.empty())
             theme.font = "Monospace";
@@ -665,8 +694,8 @@ namespace SpatialOverview::Hud {
         theme.panelShadowSize = number("navigator:panel_shadow_size");
         // Lower panel opacity turns the whole palette to glass, rows included.
         const float PANELALPHA = sc<float>(number("navigator:panel_opacity"));
-        theme.panel.a          = PANELALPHA;
-        theme.card.a           = std::min(0.96F, PANELALPHA + 0.02F);
+        theme.panel.a          *= PANELALPHA;
+        theme.card.a           *= std::min(0.96F, PANELALPHA + 0.02F);
         theme.searchEdge       = accent;
         if (const auto EDGE = parseHex(ScrollOverview::Config::getValue<std::string>("plugin:spatialoverview:navigator:search_border_color")))
             theme.searchEdge = *EDGE;
@@ -676,14 +705,28 @@ namespace SpatialOverview::Hud {
                                       hex(theme.accent), hex(theme.card), hex(theme.searchEdge), theme.font, theme.hudScale, theme.width, theme.top, theme.rows,
                                       theme.rowH, theme.searchH, theme.rounding, theme.tracking, theme.uppercase, theme.corners, theme.querySize, theme.titleSize,
                                       theme.detailSize, theme.cornerSize, theme.labelSize, theme.searchBorder, theme.searchGlow, PANELALPHA, theme.searchEdge.a) +
-            std::format("|{:.1f}|{:.2f}|{:.1f}", theme.panelPad, theme.panelShadow, theme.panelShadowSize);
+            std::format("|{:.1f}|{:.2f}|{:.1f}|{:08x}{:08x}{:08x}{:08x}{:08x}{:08x}", theme.panelPad, theme.panelShadow, theme.panelShadowSize,
+                        PANELCOLOR.getAsHex(), CARDCOLOR.getAsHex(), EDGECOLOR.getAsHex(), TEXTCOLOR.getAsHex(), TEXTDIMCOLOR.getAsHex(), TEXTFAINTCOLOR.getAsHex());
         g_theme = theme;
     }
 
+    void setOutputColors(std::unordered_map<std::string, SOutputColors> colors) {
+        g_outputColors = std::move(colors);
+        g_themeFrame = std::numeric_limits<uint64_t>::max();
+    }
+
+    void beginFrame(const std::string& monitorName) {
+        if (g_currentMonitor != monitorName) {
+            g_currentMonitor = monitorName;
+            g_themeFrame = std::numeric_limits<uint64_t>::max();
+        }
+    }
+
     const STheme& theme() {
-        if (g_themeFrame != g_frame) {
+        if (g_themeFrame != g_frame || g_themeMonitor != g_currentMonitor) {
             refreshTheme();
             g_themeFrame = g_frame;
+            g_themeMonitor = g_currentMonitor;
         }
         return g_theme;
     }
@@ -691,15 +734,17 @@ namespace SpatialOverview::Hud {
     // ---- palette -----------------------------------------------------------------
 
     bool palette(const SPaletteView& view, SP<Render::ITexture>& texture, CBox& box) {
+        beginFrame(view.monitorName);
         const auto& STATE = Navigator::state();
         if (!STATE.open || view.monitorSize.x <= 0 || view.monitorSize.y <= 0)
             return false;
 
         const auto& THEME = theme();
         const auto  KEY   = paletteKey(view, STATE);
-        if (g_palette.texture && g_palette.key == KEY) {
-            texture = g_palette.texture;
-            box     = g_palette.box;
+        auto& cachedPalette = g_palettes[view.monitorName];
+        if (cachedPalette.texture && cachedPalette.key == KEY) {
+            texture = cachedPalette.texture;
+            box     = cachedPalette.box;
             return true;
         }
 
@@ -742,10 +787,10 @@ namespace SpatialOverview::Hud {
         // The container: dark glass lifted by a soft shadow.
         if (THEME.panel.a > 0.001F) {
             // Even on every side, so the padding reads the same all round.
-            shadow(cr, M, M, W, CONTAINERH, R + 7.0 * s, THEME.panelShadowSize * s, THEME.panelShadow, 0.0);
-            roundedRect(cr, M, M, W, CONTAINERH, R + 7.0 * s);
+            shadow(cr, M, M, W, CONTAINERH, interfaceRadius(R + 7.0 * s, THEME), THEME.panelShadowSize * s, THEME.panelShadow, 0.0);
+            roundedRect(cr, M, M, W, CONTAINERH, interfaceRadius(R + 7.0 * s, THEME));
             cairo_pattern_t* fill = cairo_pattern_create_linear(0, M, 0, M + CONTAINERH);
-            const auto       TOP  = mix(THEME.panel, CHyprColor{1, 1, 1, THEME.panel.a}, 0.035F);
+            const auto       TOP  = mix(THEME.panel, withAlpha(THEME.text, THEME.panel.a), 0.035F);
             cairo_pattern_add_color_stop_rgba(fill, 0, TOP.r, TOP.g, TOP.b, TOP.a);
             cairo_pattern_add_color_stop_rgba(fill, 1, THEME.panel.r, THEME.panel.g, THEME.panel.b, THEME.panel.a);
             cairo_set_source(cr, fill);
@@ -835,8 +880,9 @@ namespace SpatialOverview::Hud {
                     const auto   TEXT   = ui("Enter");
                     const double BADGEW = measureText(BADGE, TEXT) + 26.0 * s;
                     const double BADGEH = std::min(34.0, THEME.rowH * 0.59) * s;
-                    roundedRect(cr, rightEdge - BADGEW + 4.0 * s, MID - BADGEH / 2.0, BADGEW, BADGEH, std::min(7.0 * s, BADGEH / 2.0));
-                    cairo_set_source_rgba(cr, 0.03, 0.03, 0.03, 1.0);
+                    roundedRect(cr, rightEdge - BADGEW + 4.0 * s, MID - BADGEH / 2.0, BADGEW, BADGEH,
+                                interfaceRadius(std::min(7.0 * s, BADGEH / 2.0), THEME));
+                    setColor(cr, THEME.onAccent);
                     cairo_fill(cr);
                     drawText(cr, BADGE, TEXT, rightEdge - BADGEW + 4.0 * s + 13.0 * s, MID, THEME.accent);
                     rightEdge -= BADGEW + 12.0 * s;
@@ -882,13 +928,13 @@ namespace SpatialOverview::Hud {
             return false;
 
         const Vector2D FULL = view.monitorSize * view.scale;
-        g_palette.key       = KEY;
-        g_palette.texture   = uploaded;
-        g_palette.panels    = std::move(panels);
-        g_palette.rows      = std::move(rows);
-        g_palette.box       = CBox{std::round((FULL.x - TEXW) / 2.0), std::round(FULL.y * THEME.top - M), sc<double>(TEXW), sc<double>(TEXH)};
-        texture             = g_palette.texture;
-        box                 = g_palette.box;
+        cachedPalette.key       = KEY;
+        cachedPalette.texture   = uploaded;
+        cachedPalette.panels    = std::move(panels);
+        cachedPalette.rows      = std::move(rows);
+        cachedPalette.box       = CBox{std::round((FULL.x - TEXW) / 2.0), std::round(FULL.y * THEME.top - M), sc<double>(TEXW), sc<double>(TEXH)};
+        texture                 = cachedPalette.texture;
+        box                     = cachedPalette.box;
         return true;
     }
 
@@ -899,11 +945,13 @@ namespace SpatialOverview::Hud {
         return std::clamp((BOTTOM + monitorSize.y) / 2.0, monitorSize.y / 2.0, monitorSize.y * 0.66);
     }
 
-    int paletteHit(const Vector2D& point, PHLWINDOW* window) {
-        if (!g_palette.texture || !Navigator::isOpen())
+    int paletteHit(const std::string& monitorName, const Vector2D& point, PHLWINDOW* window) {
+        const auto cached = g_palettes.find(monitorName);
+        if (cached == g_palettes.end() || !cached->second.texture || !Navigator::isOpen())
             return PALETTE_MISS;
-        const auto LOCAL = point - g_palette.box.pos();
-        for (const auto& row : g_palette.rows) {
+        const auto& palette = cached->second;
+        const auto LOCAL = point - palette.box.pos();
+        for (const auto& row : palette.rows) {
             if (!row.box.containsPoint(LOCAL))
                 continue;
             // The row names the window it showed, even if the results have
@@ -912,7 +960,7 @@ namespace SpatialOverview::Hud {
                 *window = row.window.lock();
             return row.index;
         }
-        for (const auto& panel : g_palette.panels) {
+        for (const auto& panel : palette.panels) {
             if (panel.containsPoint(LOCAL))
                 return PALETTE_PANEL;
         }
@@ -922,6 +970,7 @@ namespace SpatialOverview::Hud {
     // ---- screen corners ------------------------------------------------------------
 
     bool chrome(const SPaletteView& view, SChrome& out) {
+        beginFrame(view.monitorName);
         const auto& STATE = Navigator::state();
         if (!STATE.open || view.monitorSize.x <= 0 || view.monitorSize.y <= 0)
             return false;
@@ -979,8 +1028,9 @@ namespace SpatialOverview::Hud {
             for (const auto& [markup, color] : block.lines)
                 key += "|" + markup + hex(color);
         }
-        if (g_chrome.chrome.texture && g_chrome.key == key) {
-            out = g_chrome.chrome;
+        auto& cachedChrome = g_chromes[view.monitorName];
+        if (cachedChrome.chrome.texture && cachedChrome.key == key) {
+            out = cachedChrome.chrome;
             return true;
         }
 
@@ -1031,7 +1081,7 @@ namespace SpatialOverview::Hud {
         if (!result.texture)
             return false;
 
-        g_chrome = SCachedChrome{.key = key, .chrome = result};
+        cachedChrome = SCachedChrome{.key = key, .chrome = result};
         out      = result;
         return true;
     }
@@ -1047,9 +1097,11 @@ namespace SpatialOverview::Hud {
         if (cell < 2.0)
             return nullptr;
 
-        const auto KEY = std::format("{}|{}|{}|{}", cell, mark, fine, style);
-        if (g_gridTile && g_gridTileKey == KEY)
-            return g_gridTile;
+        const auto COLOR = theme().textDim;
+        const auto KEY = std::format("{}|{}|{}|{}|{:08x}", cell, mark, fine, style, COLOR.getAsHex());
+        auto& cachedTile = g_gridTiles[g_currentMonitor];
+        if (cachedTile.texture && cachedTile.key == KEY)
+            return cachedTile.texture;
 
         const double SPAN    = cell * 2.0;
         const int    PIXELS  = std::max(2, sc<int>(std::round(SPAN)));
@@ -1065,7 +1117,7 @@ namespace SpatialOverview::Hud {
                     continue;
                 const double X = cell * 0.5 + column * cell;
                 const double Y = cell * 0.5 + row * cell;
-                cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, ALPHA);
+                setColor(cr, COLOR, ALPHA);
                 if (style == 1) {
                     cairo_new_sub_path(cr);
                     cairo_arc(cr, X, Y, mark * 0.5, 0, 2 * M_PI);
@@ -1078,7 +1130,7 @@ namespace SpatialOverview::Hud {
                     cairo_fill(cr);
                 }
                 if (column == 0) {
-                    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, row == 0 ? 1.0 : fine);
+                    setColor(cr, COLOR, row == 0 ? 1.0F : fine);
                     cairo_rectangle(cr, 0, Y - mark * 0.5, SPAN, mark);
                     cairo_fill(cr);
                 }
@@ -1086,10 +1138,10 @@ namespace SpatialOverview::Hud {
         }
 
         cairo_destroy(cr);
-        g_gridTile    = upload(surface);
-        g_gridTileKey = g_gridTile ? KEY : std::string{};
+        cachedTile.texture = upload(surface);
+        cachedTile.key = cachedTile.texture ? KEY : std::string{};
         cairo_surface_destroy(surface);
-        return g_gridTile;
+        return cachedTile.texture;
     }
 
     // ---- world labels ------------------------------------------------------------
@@ -1132,7 +1184,7 @@ namespace SpatialOverview::Hud {
         auto*     cr      = cairo_create(surface);
         cairo_set_antialias(cr, CAIRO_ANTIALIAS_BEST);
 
-        roundedRect(cr, 0.5, 0.5, TEXW - 1.0, TEXH - 1.0, 4.0 * s);
+        roundedRect(cr, 0.5, 0.5, TEXW - 1.0, TEXH - 1.0, interfaceRadius(4.0 * s, THEME));
         setColor(cr, selected ? THEME.accent : withAlpha(THEME.panel, 0.9F));
         cairo_fill_preserve(cr);
         setColor(cr, selected ? THEME.accent : THEME.edge);
@@ -1182,10 +1234,13 @@ namespace SpatialOverview::Hud {
     void shutdown() {
         g_labels.clear();
         g_labelWidths.clear();
-        g_gridTile.reset();
-        g_gridTileKey.clear();
-        g_palette = SCachedPalette{};
-        g_chrome  = SCachedChrome{};
+        g_gridTiles.clear();
+        g_palettes.clear();
+        g_chromes.clear();
+        g_outputColors.clear();
+        g_currentMonitor.clear();
+        g_themeMonitor.clear();
+        g_themeFrame = std::numeric_limits<uint64_t>::max();
         Icons::shutdown();
         if (g_measure)
             cairo_destroy(g_measure);

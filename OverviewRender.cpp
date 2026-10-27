@@ -7,12 +7,25 @@
 
 namespace OverviewRender {
 
+const CBox* canvasViewportClip = nullptr;
+
 void flushPass(PHLMONITOR monitor) {
     if (!monitor || g_pHyprRenderer->m_renderPass.empty())
         return;
 
-    g_pHyprRenderer->m_renderPass.render(CRegion{CBox{{}, monitor->m_transformedSize}});
+    auto damage = CRegion{CBox{{}, monitor->m_transformedSize}};
+    if (canvasViewportClip)
+        damage.intersect(*canvasViewportClip);
+    const auto previousDamage = g_pHyprRenderer->m_renderData.damage.copy();
+    const auto previousFinalDamage = g_pHyprRenderer->m_renderData.finalDamage.copy();
+    const auto renderedDamage = g_pHyprRenderer->m_renderPass.render(damage);
     g_pHyprRenderer->m_renderPass.clear();
+    if (canvasViewportClip) {
+        // Clipping this plane must not shrink native damage already rendered
+        // outside it, especially when the incoming workspace is empty.
+        g_pHyprRenderer->m_renderData.damage = previousDamage;
+        g_pHyprRenderer->m_renderData.finalDamage = previousFinalDamage.copy().add(renderedDamage);
+    }
 }
 
 void queueBlur(const CBox& box, int rounding, float roundingPower, float alpha, bool usePrecomputedBlur) {

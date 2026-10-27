@@ -659,7 +659,9 @@ static void renderOverviewWindowBorder(PHLMONITOR monitor, const PHLWINDOW& wind
 
     auto grad = window->m_realBorderColor;
 
-    const CBox borderBox = getOverviewBorderBox(windowBox, metrics);
+    // Match the surface's final pixel grid, as native Hyprland borders do.
+    // Fractional camera bounds otherwise lose or gain a pixel on individual edges.
+    const CBox borderBox = getOverviewBorderBox(windowBox, metrics).round();
 
     CBorderPassElement::SBorderData data;
     data.box           = borderBox;
@@ -1015,8 +1017,10 @@ void renderOverviewWindow(const SRenderParams& params) {
 
     if (params.cameraTransform && params.monitor) {
         const auto SOURCEGEOMETRY = params.window->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
+        // Match renderWindow's surface origin, including Hyprland's temporary
+        // floating correction during workspace slides. It is not camera motion.
         const CBox SOURCEBOX{
-            (SOURCEGEOMETRY.pos() - params.monitor->m_position) * params.monitor->m_scale,
+            (SOURCEGEOMETRY.pos() + params.window->m_floatingOffset - params.monitor->m_position) * params.monitor->m_scale,
             SOURCEGEOMETRY.size() * params.monitor->m_scale,
         };
 
@@ -1035,12 +1039,12 @@ void renderOverviewWindow(const SRenderParams& params) {
     }
     if (OVERRIDEWORKSPACEOFFSET) {
         WORKSPACE->m_renderOffset->value() = {};
-        // Persistent canvas can outlive the workspace. Newly-created or
-        // hidden special workspaces therefore legitimately carry alpha 0,
-        // but their live surfaces must remain visible on the canvas. Hyprland
-        // snapshots this value into each queued surface pass, so override only
-        // the current value while queuing and restore it synchronously below.
-        if (WORKSPACE->m_alpha)
+        // Persistent Canvas can outlive its workspace. Hidden workspaces may
+        // legitimately carry alpha 0, but a live workspace transition must
+        // retain Hyprland's animated alpha so Canvas clients fade with the
+        // workspace instead of appearing instantly. Surface passes snapshot
+        // this value, so override only the current value while queuing.
+        if (WORKSPACE->m_alpha && !WORKSPACE->m_alpha->isBeingAnimated())
             WORKSPACE->m_alpha->value() = 1.F;
     }
 

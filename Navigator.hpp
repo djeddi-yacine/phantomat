@@ -64,8 +64,10 @@ namespace SpatialOverview::Navigator {
 
     SState&          state();
     void             touch();
-    void             begin(const PHLWINDOW& focused);
+    void             begin(const PHLWINDOW& focused, const PHLWORKSPACE& workspace = {});
     void             end();
+    void             endWorkspace(const PHLWORKSPACE& workspace);
+    bool             belongsToWorkspace(const PHLWORKSPACE& workspace);
     bool             isOpen();
     void             setDamageCallback(std::function<void()> callback);
     void             showNotice(const std::string& text);

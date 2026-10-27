@@ -97,6 +97,7 @@ hl.config({
         minimap_width = 240,
         minimap_height = 150,
         minimap_margin = 24,
+        minimap_rounding = 14, -- zero squares the minimap and its controls
         minimap_opacity = 0.72,
         arrange_context_grouping = true,
         arrange_size_similarity = 0.12,
@@ -119,6 +120,7 @@ hl.config({
         commit_viewport_on_close = true,
         snap_enabled = true,
         remember_layout = true, -- windows keep their spots across restarts
+        remember_overview = false, -- workspace-bound: restore HUD/search/camera on return (session only)
       },
 
       -- Type-to-search palette in the zoomed-out canvas.
@@ -128,6 +130,14 @@ hl.config({
         dim_unmatched = 0.7,    -- how far non-matching windows recede (0..1)
         pointer = true,         -- click lands, drag moves or pans, wheel zooms
         accent = "#ff6b1a",     -- selected row, caret, key names; #rrggbb, a preset (cyan, violet, ...) or "auto" for the theme
+        colors = {
+          panel = "rgb(0e0e0f)",
+          card = "rgb(1b1b1c)",
+          edge = "rgba(ffffff11)",
+          text = "rgb(ededed)",
+          text_dim = "rgb(8f8f91)",
+          text_faint = "rgb(5c5c5e)",
+        },
         mono_font = "JetBrainsMono Nerd Font", -- the whole HUD is set in this
 
         -- Look (feature level 3). All of these are also in the live tuner.

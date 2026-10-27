@@ -294,10 +294,6 @@ bool updateMinimap(const SMinimapData& data) {
         if (const auto location = glGetUniformLocation(SHADER->program(), name); location >= 0)
             glUniform1i(location, value);
     };
-    const auto set3f = [&](const char* name, const std::array<float, 3>& value) {
-        if (const auto location = glGetUniformLocation(SHADER->program(), name); location >= 0)
-            glUniform3f(location, value[0], value[1], value[2]);
-    };
     const auto set4f = [&](const char* name, const std::array<float, 4>& value) {
         if (const auto location = glGetUniformLocation(SHADER->program(), name); location >= 0)
             glUniform4f(location, value[0], value[1], value[2], value[3]);
@@ -313,8 +309,12 @@ bool updateMinimap(const SMinimapData& data) {
     set4f("minimapPanel", data.panel);
     set4f("minimapArrangeButton", data.arrangeButton);
     set4f("minimapViewport", data.viewport);
-    set3f("minimapActiveColor", data.activeColor);
-    set3f("minimapInactiveColor", data.inactiveColor);
+    set4f("minimapActiveColor", data.activeColor);
+    set4f("minimapInactiveColor", data.inactiveColor);
+    set4f("minimapPanelColor", data.panelColor);
+    set4f("minimapOutlineColor", data.outlineColor);
+    set1f("minimapRounding", data.rounding);
+    set1f("minimapScale", data.scale);
     set1f("minimapOpacity", data.opacity);
     set1f("minimapTransition", data.transition);
     set1i("minimapWindowCount", sc<int>(WINDOWCOUNT));

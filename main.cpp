@@ -2,6 +2,7 @@
 
 #include <unistd.h>
 #include <sstream>
+#include <hyprutils/utils/ScopeGuard.hpp>
 
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
@@ -32,11 +33,15 @@ using namespace Hyprutils::String;
 #include "Experiments.hpp"
 #include "Hud.hpp"
 #include "Navigator.hpp"
+#include "OverviewRender.hpp"
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 #include "OverviewGesture.hpp"
 
 // Methods
-static CFunctionHook* g_pScrollRenderWorkspaceHook = nullptr;
+static CFunctionHook* g_pScrollRenderWorkspaceHook     = nullptr;
+static CFunctionHook* g_pScrollRenderWindowHook        = nullptr;
+static CFunctionHook* g_pScrollWorkspaceWindowsHook    = nullptr;
+static CFunctionHook* g_pScrollWorkspaceFullscreenHook = nullptr;
 static CFunctionHook* g_pScrollAddDamageHookA      = nullptr;
 static CFunctionHook* g_pScrollAddDamageHookB      = nullptr;
 static CFunctionHook* g_pScrollDamageSurfaceHook   = nullptr;
@@ -45,6 +50,7 @@ static CFunctionHook* g_pScrollSendFrameEventsHook = nullptr;
 static CFunctionHook* g_pScrollSurfaceFrameHook    = nullptr;
 static CFunctionHook* g_pScrollDrawTexHook         = nullptr;
 static CFunctionHook* g_pScrollElementDrawTexHook  = nullptr;
+static CFunctionHook* g_pScrollDrawElementHook     = nullptr;
 static CFunctionHook* g_pPopupRepositionHook       = nullptr;
 static CFunctionHook* g_pBeginDragTargetHook       = nullptr;
 static CFunctionHook* g_pX11ConfigureHook          = nullptr;
@@ -60,6 +66,8 @@ CBox canvasX11Configure(void* surface, const CBox& box);
 CBox canvasX11Request(void* window, CBox box);
 void canvasReleaseX11Windows();
 typedef void (*origRenderWorkspace)(void*, PHLMONITOR, PHLWORKSPACE, const Time::steady_tp&, const CBox&);
+typedef void (*origRenderWindow)(void*, PHLWINDOW, PHLMONITOR, const Time::steady_tp&, bool, Render::eRenderPassMode, bool, bool);
+typedef void (*origWorkspaceWindows)(void*, PHLMONITOR, PHLWORKSPACE, const Time::steady_tp&);
 typedef void (*origAddDamageA)(void*, const CBox&);
 typedef void (*origAddDamageB)(void*, const pixman_region32_t*);
 typedef void (*origDamageSurface)(void*, SP<CWLSurfaceResource>, double, double, double);
@@ -68,6 +76,7 @@ typedef void (*origSendFrameEventsToWorkspace)(void*, PHLMONITOR, PHLWORKSPACE, 
 typedef void (*origSurfaceFrame)(void*, const Time::steady_tp&);
 typedef void (*origDrawTex)(void*, WP<CTexPassElement>, const CRegion&);
 typedef void (*origElementDrawTex)(void*, WP<CTexPassElement>, const CRegion&);
+typedef void (*origDrawElement)(void*, WP<IPassElement>, const CRegion&);
 
 static bool g_unloading = false;
 
@@ -79,7 +88,16 @@ APICALL EXPORT std::string PLUGIN_API_VERSION() {
 static bool renderingOverview = false;
 static bool damageFromSurface = false;
 static PHLMONITORREF renderingOverviewMonitor;
+struct SWorkspaceCanvasRenderContext {
+    PHLMONITOR                        monitor;
+    PHLWORKSPACE                      workspace;
+    std::vector<SP<CScrollOverview>>   canvases;
+};
+// Only valid while the native workspace pass is executing synchronously.
+static SWorkspaceCanvasRenderContext* g_workspaceCanvasRenderContext = nullptr;
 static bool g_scrollOverviewHooksActive = false;
+static wl_event_source* g_workspaceCanvasSyncIdle = nullptr;
+static wl_event_source* g_workspaceCanvasTransitionTimer = nullptr;
 
 static void failNotif(const std::string& reason);
 
@@ -87,23 +105,37 @@ bool ensureScrollOverviewHooks() {
     if (g_scrollOverviewHooksActive)
         return true;
 
-    bool success = g_pScrollRenderWorkspaceHook->hook();
-    success      = success && g_pScrollScheduleFrameHook->hook();
-    success      = success && g_pScrollDamageSurfaceHook->hook();
-    success      = success && g_pScrollSendFrameEventsHook->hook();
-    success      = success && g_pScrollSurfaceFrameHook->hook();
-    success      = success && g_pScrollAddDamageHookA->hook();
-    success      = success && g_pScrollAddDamageHookB->hook();
-    success      = success && g_pScrollDrawTexHook->hook();
-    success      = success && g_pScrollElementDrawTexHook->hook();
-    success      = success && g_pPopupRepositionHook->hook();
-    success      = success && g_pBeginDragTargetHook->hook();
-    success      = success && g_pX11ConfigureHook->hook();
-    success      = success && g_pX11ConfigureRequestHook->hook();
+    std::string failedHook;
+    const auto hook = [&failedHook](std::string_view name, CFunctionHook* function) {
+        if (function && function->hook())
+            return true;
+
+        failedHook = name;
+        Log::logger->log(Log::ERR, "[spatialoverview] failed to enable overview hook: {}", name);
+        return false;
+    };
+
+    bool success = hook("renderWorkspace", g_pScrollRenderWorkspaceHook);
+    success      = success && hook("renderWindow", g_pScrollRenderWindowHook);
+    success      = success && hook("renderWorkspaceWindows", g_pScrollWorkspaceWindowsHook);
+    success      = success && hook("renderWorkspaceWindowsFullscreen", g_pScrollWorkspaceFullscreenHook);
+    success      = success && hook("scheduleFrame", g_pScrollScheduleFrameHook);
+    success      = success && hook("damageSurface", g_pScrollDamageSurfaceHook);
+    success      = success && hook("sendFrameEventsToWorkspace", g_pScrollSendFrameEventsHook);
+    success      = success && hook("surfaceFrame", g_pScrollSurfaceFrameHook);
+    success      = success && hook("addDamage(CBox)", g_pScrollAddDamageHookA);
+    success      = success && hook("addDamage(pixman_region32)", g_pScrollAddDamageHookB);
+    success      = success && hook("draw", g_pScrollDrawTexHook);
+    success      = success && hook("drawTex", g_pScrollElementDrawTexHook);
+    success      = success && hook("drawElement", g_pScrollDrawElementHook);
+    success      = success && hook("popupReposition", g_pPopupRepositionHook);
+    success      = success && hook("beginDragTarget", g_pBeginDragTargetHook);
+    success      = success && hook("x11Configure", g_pX11ConfigureHook);
+    success      = success && hook("x11ConfigureRequest", g_pX11ConfigureRequestHook);
 
     if (!success) {
         disableScrollOverviewHooks();
-        failNotif("Failed enabling overview hooks (is other overview plugin enabled?)");
+        failNotif(std::format("Failed enabling overview hook: {}", failedHook));
         return false;
     }
 
@@ -112,6 +144,8 @@ bool ensureScrollOverviewHooks() {
 }
 
 void disableScrollOverviewHooks() {
+    if (g_pScrollDrawElementHook)
+        g_pScrollDrawElementHook->unhook();
     if (g_pX11ConfigureRequestHook)
         g_pX11ConfigureRequestHook->unhook();
     if (g_pX11ConfigureHook)
@@ -138,8 +172,69 @@ void disableScrollOverviewHooks() {
         g_pScrollScheduleFrameHook->unhook();
     if (g_pScrollRenderWorkspaceHook)
         g_pScrollRenderWorkspaceHook->unhook();
+    if (g_pScrollRenderWindowHook)
+        g_pScrollRenderWindowHook->unhook();
+    if (g_pScrollWorkspaceWindowsHook)
+        g_pScrollWorkspaceWindowsHook->unhook();
+    if (g_pScrollWorkspaceFullscreenHook)
+        g_pScrollWorkspaceFullscreenHook->unhook();
 
     g_scrollOverviewHooksActive = false;
+}
+
+static int workspaceCanvasTransitionTimerCallback(void*) {
+    if (g_unloading) {
+        clearWorkspaceTransitionOverviews();
+        g_workspaceCanvasTransitionTimer = nullptr;
+        return 0;
+    }
+
+    const auto transitions = workspaceTransitionOverviews();
+    for (const auto& overview : transitions) {
+        const auto* canvas = dynamic_cast<const CScrollOverview*>(overview.get());
+        const auto  workspace = canvas ? canvas->workspaceCanvas() : PHLWORKSPACE{};
+        const bool  animating = valid(workspace) &&
+            (workspace->m_alpha->isBeingAnimated() || workspace->m_renderOffset->isBeingAnimated());
+        if (!animating) {
+            releaseWorkspaceTransitionOverview(overview.get());
+            // Retiring a camera plane erases its output-space footprint once.
+            // Native source-window damage cannot describe that old footprint.
+            if (const auto monitor = overview->pMonitor.lock())
+                g_pHyprRenderer->damageMonitor(monitor);
+        }
+    }
+
+    if (workspaceTransitionOverviews().empty()) {
+        if (g_workspaceCanvasTransitionTimer) wl_event_source_remove(g_workspaceCanvasTransitionTimer);
+        g_workspaceCanvasTransitionTimer = nullptr;
+        if (scrollOverviews().empty())
+            disableScrollOverviewHooks();
+        return 0;
+    }
+
+    if (g_workspaceCanvasTransitionTimer)
+        wl_event_source_timer_update(g_workspaceCanvasTransitionTimer, 16);
+    return 0;
+}
+
+static void scheduleWorkspaceCanvasTransitionCleanup() {
+    if (g_workspaceCanvasTransitionTimer || !g_pCompositor || g_unloading)
+        return;
+
+    g_workspaceCanvasTransitionTimer = wl_event_loop_add_timer(g_pCompositor->m_wlEventLoop, workspaceCanvasTransitionTimerCallback, nullptr);
+    if (g_workspaceCanvasTransitionTimer)
+        wl_event_source_timer_update(g_workspaceCanvasTransitionTimer, 16);
+}
+
+static SP<IOverview> workspaceTransitionOverviewFor(PHLMONITOR monitor, PHLWORKSPACE workspace) {
+    if (!monitor || !workspace)
+        return {};
+
+    const auto it = std::ranges::find_if(workspaceTransitionOverviews(), [&](const auto& overview) {
+        const auto* canvas = overview ? dynamic_cast<const CScrollOverview*>(overview.get()) : nullptr;
+        return canvas && canvas->pMonitor.lock() == monitor && canvas->workspaceCanvas() == workspace;
+    });
+    return it == workspaceTransitionOverviews().end() ? SP<IOverview>{} : *it;
 }
 
 static void hkScheduleFrame(void* thisptr, Aquamarine::IOutput::scheduleFrameReason reason) {
@@ -158,10 +253,101 @@ static void hkScheduleFrame(void* thisptr, Aquamarine::IOutput::scheduleFrameRea
     rc<origScheduleFrame>(g_pScrollScheduleFrameHook->m_original)(thisptr, reason);
 }
 
-//
+static void renderWorkspaceCanvasPlane(const SP<CScrollOverview>& overview) {
+    const auto previousOverview  = g_pScrollOverview;
+    const auto previousMonitor   = renderingOverviewMonitor;
+    const bool previousRendering = renderingOverview;
+    g_pScrollOverview = overview;
+    renderingOverviewMonitor = overview->pMonitor;
+    renderingOverview = true;
+    auto restore = Hyprutils::Utils::CScopeGuard([previousOverview, previousMonitor, previousRendering] {
+        g_pScrollOverview = previousOverview;
+        renderingOverviewMonitor = previousMonitor;
+        renderingOverview = previousRendering;
+    });
+    overview->renderWorkspaceTransition();
+}
+
+static void renderWorkspaceWindowPlanes(void* thisptr, PHLMONITOR monitor, PHLWORKSPACE workspace, const Time::steady_tp& now, origWorkspaceWindows original) {
+    const auto* context = g_workspaceCanvasRenderContext;
+    if (!context || renderingOverview || context->monitor != monitor || context->workspace != workspace) {
+        original(thisptr, monitor, workspace, now);
+        return;
+    }
+
+    // Native rendering includes every animating workspace in this one pass.
+    // Keep outgoing Canvas below the incoming workspace, before special
+    // workspaces, pinned clients, and layer surfaces are drawn natively.
+    for (const auto& overview : context->canvases) {
+        if (overview->workspaceCanvas() != workspace)
+            renderWorkspaceCanvasPlane(overview);
+    }
+    original(thisptr, monitor, workspace, now);
+    for (const auto& overview : context->canvases) {
+        if (overview->workspaceCanvas() == workspace)
+            renderWorkspaceCanvasPlane(overview);
+    }
+}
+
+static void hkWorkspaceWindows(void* thisptr, PHLMONITOR monitor, PHLWORKSPACE workspace, const Time::steady_tp& now) {
+    renderWorkspaceWindowPlanes(thisptr, monitor, workspace, now, rc<origWorkspaceWindows>(g_pScrollWorkspaceWindowsHook->m_original));
+}
+
+static void hkWorkspaceFullscreen(void* thisptr, PHLMONITOR monitor, PHLWORKSPACE workspace, const Time::steady_tp& now) {
+    renderWorkspaceWindowPlanes(thisptr, monitor, workspace, now, rc<origWorkspaceWindows>(g_pScrollWorkspaceFullscreenHook->m_original));
+}
+
+static void hkRenderWindow(void* thisptr, PHLWINDOW window, PHLMONITOR monitor, const Time::steady_tp& now, bool decorate, Render::eRenderPassMode mode,
+                           bool ignorePosition, bool standalone) {
+    const auto* context = g_workspaceCanvasRenderContext;
+    if (context && !renderingOverview && !standalone && context->monitor == monitor &&
+        std::ranges::any_of(context->canvases, [&window](const auto& overview) {
+            return overview->ownsWorkspaceTransitionWindow(window);
+        }))
+        return; // drawn once through its Canvas camera, including off-screen source clients
+
+    rc<origRenderWindow>(g_pScrollRenderWindowHook->m_original)(thisptr, window, monitor, now, decorate, mode, ignorePosition, standalone);
+}
+
 static void hkRenderWorkspace(void* thisptr, PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const Time::steady_tp& now, const CBox& geometry) {
-    const auto OVERVIEW = scrollOverviewForMonitor(pMonitor);
-    if (!OVERVIEW || renderingOverview)
+    auto overview = scrollOverviewForMonitor(pMonitor);
+    const auto* canvas = overview ? dynamic_cast<const CScrollOverview*>(overview.get()) : nullptr;
+    if (!renderingOverview && (!overview || (canvas && canvas->isWorkspaceBoundCanvas()))) {
+        SWorkspaceCanvasRenderContext context{pMonitor, pWorkspace, {}};
+        const auto append = [&](const SP<IOverview>& candidate) {
+            const auto scene = Hyprutils::Memory::dynamicPointerCast<CScrollOverview>(candidate);
+            const auto workspace = scene ? scene->workspaceCanvas() : PHLWORKSPACE{};
+            if (!scene || !scene->isWorkspaceBoundCanvas() || candidate->pMonitor.lock() != pMonitor || !workspace ||
+                (workspace != pWorkspace && !workspace->m_alpha->isBeingAnimated() && !workspace->m_renderOffset->isBeingAnimated()))
+                return;
+            if (std::ranges::none_of(context.canvases, [&](const auto& existing) {
+                    return existing->workspaceCanvas() == workspace;
+                }))
+                context.canvases.push_back(scene);
+        };
+        append(overview);
+        for (const auto& outgoing : workspaceTransitionOverviews())
+            append(outgoing);
+
+        const bool animating = std::ranges::any_of(context.canvases, [](const auto& scene) {
+            const auto workspace = scene->workspaceCanvas();
+            return workspace->m_alpha->isBeingAnimated() || workspace->m_renderOffset->isBeingAnimated();
+        });
+        if (animating) {
+            const auto previousContext = g_workspaceCanvasRenderContext;
+            g_workspaceCanvasRenderContext = &context;
+            auto restore = Hyprutils::Utils::CScopeGuard([previousContext] { g_workspaceCanvasRenderContext = previousContext; });
+            rc<origRenderWorkspace>(g_pScrollRenderWorkspaceHook->m_original)(thisptr, pMonitor, pWorkspace, now, geometry);
+            return;
+        }
+    }
+    if (canvas && canvas->isWorkspaceBoundCanvas() && canvas->workspaceCanvas() != pWorkspace)
+        overview = workspaceTransitionOverviewFor(pMonitor, pWorkspace);
+
+    if (!overview)
+        overview = workspaceTransitionOverviewFor(pMonitor, pWorkspace);
+
+    if (!overview || renderingOverview)
         rc<origRenderWorkspace>(g_pScrollRenderWorkspaceHook->m_original)(thisptr, pMonitor, pWorkspace, now, geometry);
     else {
         const bool PREVRENDERINGOVERVIEW = renderingOverview;
@@ -169,8 +355,8 @@ static void hkRenderWorkspace(void* thisptr, PHLMONITOR pMonitor, PHLWORKSPACE p
         const auto PREVOVERVIEW          = g_pScrollOverview;
         renderingOverview                = true;
         renderingOverviewMonitor         = pMonitor;
-        g_pScrollOverview                = OVERVIEW;
-        OVERVIEW->render();
+        g_pScrollOverview                = overview;
+        overview->render();
         g_pScrollOverview = PREVOVERVIEW;
         renderingOverviewMonitor = PREVRENDERINGMONITOR;
         renderingOverview = PREVRENDERINGOVERVIEW;
@@ -178,19 +364,30 @@ static void hkRenderWorkspace(void* thisptr, PHLMONITOR pMonitor, PHLWORKSPACE p
 }
 
 static void hkDamageSurface(void* thisptr, SP<CWLSurfaceResource> surface, double x, double y, double scale) {
-    const bool HANDLED = scrollOverviews().empty() ||
-        std::ranges::any_of(scrollOverviews(), [](const auto& overview) { return overview && overview->blockDamageReporting; }) ||
-        std::ranges::all_of(scrollOverviews(), [&surface](const auto& overview) { return !overview || overview->shouldHandleSurfaceDamage(surface); });
+    const auto allHandleSurface = [&surface](const auto& overviews) {
+        return std::ranges::all_of(overviews, [&surface](const auto& overview) { return !overview || overview->shouldHandleSurfaceDamage(surface); });
+    };
+    const auto anyBlocksDamage = [](const auto& overviews) {
+        return std::ranges::any_of(overviews, [](const auto& overview) { return overview && overview->blockDamageReporting; });
+    };
+    const bool HASOVERVIEWS = !scrollOverviews().empty() || !workspaceTransitionOverviews().empty();
+    const bool HANDLED = !HASOVERVIEWS || anyBlocksDamage(scrollOverviews()) || anyBlocksDamage(workspaceTransitionOverviews()) ||
+        (allHandleSurface(scrollOverviews()) && allHandleSurface(workspaceTransitionOverviews()));
     if (HANDLED) {
         const bool PREVDAMAGEFROMSURFACE = damageFromSurface;
-        damageFromSurface                = !scrollOverviews().empty();
+        damageFromSurface                = HASOVERVIEWS;
         rc<origDamageSurface>(g_pScrollDamageSurfaceHook->m_original)(thisptr, surface, x, y, scale);
         damageFromSurface = PREVDAMAGEFROMSURFACE;
     }
 }
 
 static void hkSendFrameEventsToWorkspace(void* thisptr, PHLMONITOR monitor, PHLWORKSPACE workspace, const Time::steady_tp& now) {
-    if (scrollOverviewForMonitor(monitor))
+    if (const auto OVERVIEW = scrollOverviewForMonitor(monitor)) {
+        const auto* CANVAS = dynamic_cast<const CScrollOverview*>(OVERVIEW.get());
+        if (!CANVAS || !CANVAS->isWorkspaceBoundCanvas() || CANVAS->workspaceCanvas() == workspace)
+            return;
+    }
+    if (workspaceTransitionOverviewFor(monitor, workspace))
         return;
 
     rc<origSendFrameEventsToWorkspace>(g_pScrollSendFrameEventsHook->m_original)(thisptr, monitor, workspace, now);
@@ -198,11 +395,40 @@ static void hkSendFrameEventsToWorkspace(void* thisptr, PHLMONITOR monitor, PHLW
 
 static void hkSurfaceFrame(void* thisptr, const Time::steady_tp& now) {
     const auto SURFACE = sc<CWLSurfaceResource*>(thisptr)->m_self.lock();
+    const auto disallowFrame = [&SURFACE, &now](const auto& overviews) {
+        return std::ranges::any_of(overviews, [&SURFACE, &now](const auto& overview) { return overview && !overview->shouldAllowSurfaceFrame(SURFACE, now); });
+    };
 
-    if (std::ranges::any_of(scrollOverviews(), [&SURFACE, &now](const auto& overview) { return overview && !overview->shouldAllowSurfaceFrame(SURFACE, now); }))
+    if (disallowFrame(scrollOverviews()) || disallowFrame(workspaceTransitionOverviews()))
         return;
 
     rc<origSurfaceFrame>(g_pScrollSurfaceFrameHook->m_original)(thisptr, now);
+}
+
+static void hkDrawElement(void* thisptr, WP<IPassElement> element, const CRegion& damage) {
+    const auto* clip = OverviewRender::canvasViewportClip;
+    if (!renderingOverview || !clip || !element) {
+        rc<origDrawElement>(g_pScrollDrawElementHook->m_original)(thisptr, element, damage);
+        return;
+    }
+
+    // Live blur can expand a pass's damage. Bound every primitive again at
+    // draw time, so surfaces, borders and shadows share one finite viewport.
+    const auto clippedDamage = damage.copy().intersect(*clip);
+    const auto texture = element->type() == EK_TEXTURE ? Hyprutils::Memory::dynamicPointerCast<CTexPassElement>(element) : WP<CTexPassElement>{};
+    const auto& modif = g_pHyprRenderer->m_renderData.renderModif;
+    const bool cameraSurface = texture && texture->m_data.surface && g_pHyprRenderer->m_renderData.currentWindow &&
+        modif.enabled && !modif.modifs.empty();
+    // Surface damage is still in source coordinates here. The texture hook
+    // projects it through the camera before deciding whether it is visible.
+    if (clippedDamage.empty() && element->type() != EK_HINTS && !cameraSurface)
+        return;
+    const auto previousDamage = g_pHyprRenderer->m_renderData.damage.copy();
+    g_pHyprRenderer->m_renderData.damage = previousDamage.copy().intersect(*clip);
+    auto restore = Hyprutils::Utils::CScopeGuard([previousDamage] {
+        g_pHyprRenderer->m_renderData.damage = previousDamage;
+    });
+    rc<origDrawElement>(g_pScrollDrawElementHook->m_original)(thisptr, element, clippedDamage);
 }
 
 static void hkDrawTex(void* thisptr, WP<CTexPassElement> element, const CRegion& damage) {
@@ -222,6 +448,7 @@ static void hkDrawTex(void* thisptr, WP<CTexPassElement> element, const CRegion&
     // coordinates. Keep those masks attached to camera-transformed surfaces.
     const auto previousElementClipRegion = element->m_data.clipRegion.copy();
     const auto previousElementClipBox    = element->m_data.clipBox;
+    const auto previousRendererClipBox   = g_pHyprRenderer->m_renderData.clipBox;
 
     auto transformedDamage = damage.copy();
     if (g_pHyprRenderer->m_renderData.currentWindow && element->m_data.surface) {
@@ -245,10 +472,17 @@ static void hkDrawTex(void* thisptr, WP<CTexPassElement> element, const CRegion&
             renderModif.applyToBox(g_pHyprRenderer->m_renderData.clipBox);
     }
 
+    if (const auto* clip = OverviewRender::canvasViewportClip) {
+        transformedDamage.intersect(*clip);
+        element->m_data.clipRegion.intersect(*clip);
+        g_pHyprRenderer->m_renderData.clipBox = *clip;
+    }
+
     rc<origDrawTex>(g_pScrollDrawTexHook->m_original)(thisptr, element, transformedDamage);
 
     element->m_data.clipRegion = previousElementClipRegion;
     element->m_data.clipBox    = previousElementClipBox;
+    g_pHyprRenderer->m_renderData.clipBox = previousRendererClipBox;
 }
 
 static void hkElementDrawTex(void* thisptr, WP<CTexPassElement> element, const CRegion& damage) {
@@ -283,7 +517,12 @@ static void hkElementDrawTex(void* thisptr, WP<CTexPassElement> element, const C
     if (!element->m_data.clipBox.empty())
         renderModif.applyToBox(element->m_data.clipBox);
 
-    const CRegion transformedDamage{element->m_data.box};
+    auto transformedDamage = CRegion{element->m_data.box};
+    if (const auto* clip = OverviewRender::canvasViewportClip) {
+        transformedDamage.intersect(*clip);
+        element->m_data.clipRegion = transformedDamage;
+        element->m_data.clipBox = *clip;
+    }
     g_pHyprRenderer->m_renderData.clipBox = {};
     renderModif                           = {};
 
@@ -432,7 +671,7 @@ static SP<IOverview> dispatcherOverview() {
 
 void canvasReclaimScreen(const PHLMONITOR& monitor); // scrollOverview.cpp
 
-static bool openOverview(PHLMONITOR monitor) {
+static bool openOverview(PHLMONITOR monitor, bool workspaceBoundCanvas = false) {
     if (!monitor || scrollOverviewForMonitor(monitor))
         return true;
 
@@ -441,15 +680,86 @@ static bool openOverview(PHLMONITOR monitor) {
 
     const bool PREVRENDERINGOVERVIEW = renderingOverview;
     renderingOverview                = true;
-    auto overview                    = makeShared<CScrollOverview>(monitor->m_activeWorkspace, false, monitor);
-    registerScrollOverview(overview);
+    if (const auto retained = workspaceBoundCanvas ? workspaceTransitionOverviewFor(monitor, monitor->m_activeWorkspace) : SP<IOverview>{}) {
+        registerScrollOverview(retained);
+        static_cast<CScrollOverview*>(retained.get())->resumeAfterWorkspaceSwitch();
+        Log::logger->log(Log::DEBUG, "[spatialoverview] resumed workspace Canvas {}", monitor->m_activeWorkspace->m_id);
+    } else {
+        auto overview = makeShared<CScrollOverview>(monitor->m_activeWorkspace, false, monitor, workspaceBoundCanvas);
+        registerScrollOverview(overview);
+        if (workspaceBoundCanvas)
+            overview->restoreWorkspaceOverview();
+        if (workspaceBoundCanvas)
+            Log::logger->log(Log::DEBUG, "[spatialoverview] created workspace Canvas {}", monitor->m_activeWorkspace->m_id);
+    }
     renderingOverview = PREVRENDERINGOVERVIEW;
     canvasReclaimScreen(monitor);
     return true;
 }
 
 bool openCanvasOverview(PHLMONITOR monitor) {
-    return openOverview(monitor);
+    const auto WORKSPACE = monitor ? monitor->m_activeWorkspace : PHLWORKSPACE{};
+    if (ScrollOverview::Config::getCanvasWorkspaceBound())
+        return WORKSPACE && SpatialOverview::workspaceCanvasEnabled(WORKSPACE) && openOverview(monitor, true);
+    return openOverview(monitor, false);
+}
+
+static SDispatchResult openWorkspaceCanvas(PHLMONITOR monitor, PHLWORKSPACE workspace) {
+    if (!monitor || !workspace || monitor->m_activeWorkspace != workspace)
+        return {.success = false, .error = "Workspace Canvas requires the monitor's active workspace"};
+    const auto FULLSCREEN = Fullscreen::controller()->getFullscreenWindow(workspace);
+    if (validMapped(FULLSCREEN) && Fullscreen::controller()->isFullscreen(FULLSCREEN))
+        return {}; // Fullscreen suspends the renderer, not the workspace's requested Canvas mode.
+
+    if (const auto existing = scrollOverviewForMonitor(monitor)) {
+        auto* canvas = dynamic_cast<CScrollOverview*>(existing.get());
+        if (!canvas || !canvas->isWorkspaceBoundCanvas() || canvas->workspaceCanvas() != workspace)
+            return {.success = false, .error = "Another overview already owns this workspace's monitor"};
+        if (canvas->isClosing()) {
+            canvas->reopen();
+            if (canvas->isCanvasNavigationActive())
+                canvas->toggleCanvasNavigation();
+        }
+        return {};
+    }
+
+    if (!openOverview(monitor, true))
+        return {.success = false, .error = "Workspace Canvas failed to enable overview hooks"};
+    return {};
+}
+
+static void syncWorkspaceCanvasSessions() {
+    g_workspaceCanvasSyncIdle = nullptr;
+    if (g_unloading)
+        return;
+
+    for (const auto& monitor : State::monitorState()->monitors()) {
+        if (!monitor || !monitor->m_activeWorkspace)
+            continue;
+
+        const auto existing = scrollOverviewForMonitor(monitor);
+        auto*      canvas   = existing ? dynamic_cast<CScrollOverview*>(existing.get()) : nullptr;
+        if (canvas && canvas->isWorkspaceBoundCanvas() && canvas->workspaceCanvas() != monitor->m_activeWorkspace) {
+            retainWorkspaceTransitionOverview(existing);
+            canvas->closeForWorkspaceSwitch();
+            scheduleWorkspaceCanvasTransitionCleanup();
+        } else if (existing) {
+            continue; // never replace a regular overview or another plugin's screen
+        }
+
+        const auto FULLSCREEN = Fullscreen::controller()->getFullscreenWindow(monitor->m_activeWorkspace);
+        if (validMapped(FULLSCREEN) && Fullscreen::controller()->isFullscreen(FULLSCREEN))
+            continue; // a fullscreen client temporarily owns this workspace's output
+
+        if (SpatialOverview::workspaceCanvasEnabled(monitor->m_activeWorkspace))
+            (void)openWorkspaceCanvas(monitor, monitor->m_activeWorkspace);
+    }
+}
+
+static void scheduleWorkspaceCanvasSync() {
+    if (g_workspaceCanvasSyncIdle || !g_pCompositor || g_unloading)
+        return;
+    g_workspaceCanvasSyncIdle = wl_event_loop_add_idle(g_pCompositor->m_wlEventLoop, [](void*) { syncWorkspaceCanvasSessions(); }, nullptr);
 }
 
 void canvasFullscreenEvent(PHLWINDOW window); // scrollOverview.cpp
@@ -505,7 +815,7 @@ static SDispatchResult onOverviewDispatcher(std::string arg) {
                 if (overview->isClosing())
                     overview->reopen();
                 else if (auto* canvas = dynamic_cast<CScrollOverview*>(overview.get()); canvas && canvas->isPersistentCanvas())
-                    canvas->toggleCanvasNavigation();
+                    canvas->toggleCanvasNavigation(true);
                 else
                     overview->close();
             }
@@ -524,7 +834,7 @@ static SDispatchResult onOverviewDispatcher(std::string arg) {
         for (const auto& monitor : MONITORS) {
             auto* canvas = dynamic_cast<CScrollOverview*>(scrollOverviewForMonitor(monitor).get());
             if (canvas && canvas->isPersistentCanvas() && !canvas->isCanvasNavigationActive() && !canvas->isClosing())
-                canvas->toggleCanvasNavigation();
+                canvas->toggleCanvasNavigation(true);
         }
     }
     return {};
@@ -572,7 +882,10 @@ void requestFlightDeckNative(PHLWINDOW window, Fullscreen::eFullscreenMode mode)
     g_flightDeckIdle = wl_event_loop_add_idle(g_pCompositor->m_wlEventLoop, [](void*) {
         g_flightDeckIdle = nullptr;
         const auto request = std::move(g_flightDeckRequest);
+        if (g_workspaceCanvasTransitionTimer) wl_event_source_remove(g_workspaceCanvasTransitionTimer);
+        g_workspaceCanvasTransitionTimer = nullptr;
         clearScrollOverviews();
+        clearWorkspaceTransitionOverviews();
         disableScrollOverviewHooks();
         const auto w = request->window.lock();
         if (validMapped(w)) {
@@ -590,7 +903,71 @@ void requestFlightDeckNative(PHLWINDOW window, Fullscreen::eFullscreenMode mode)
     }
 }
 
+static SDispatchResult setWorkspaceCanvasMode(const PHLMONITOR& monitor, const PHLWORKSPACE& workspace, bool enabled) {
+    if (enabled && (!ScrollOverview::Config::getCanvasEnabled() || !ScrollOverview::Config::getCanvasDesktopMode() || !ScrollOverview::Config::getCanvasWorkspaceBound()))
+        return {.success = false, .error = "Enable canvas.enabled, canvas.desktop_mode, and canvas.workspace_bound first"};
+    if (enabled && (ScrollOverview::Config::getCanvasLinkedScreens() || ScrollOverview::Config::getCanvasPlaces()))
+        return {.success = false, .error = "Workspace-bound Canvas requires linked_screens=false and places=false"};
+
+    const auto EXISTING = scrollOverviewForMonitor(monitor);
+    if (enabled && EXISTING) {
+        const auto* CANVAS = dynamic_cast<const CScrollOverview*>(EXISTING.get());
+        if (!CANVAS || !CANVAS->isWorkspaceBoundCanvas() || CANVAS->workspaceCanvas() != workspace)
+            return {.success = false, .error = "Close the current overview before enabling workspace Canvas"};
+    }
+
+    SpatialOverview::setWorkspaceCanvasEnabled(workspace, enabled);
+    if (enabled) {
+        const auto RESULT = openWorkspaceCanvas(monitor, workspace);
+        if (RESULT.success) {
+            if (const auto OVERVIEW = scrollOverviewForMonitor(monitor)) {
+                auto* CANVAS = dynamic_cast<CScrollOverview*>(OVERVIEW.get());
+                if (CANVAS && CANVAS->isWorkspaceBoundCanvas() && CANVAS->workspaceCanvas() == workspace)
+                    CANVAS->followCanvasWindow(Desktop::focusState()->window(), true, true);
+            }
+            return RESULT;
+        }
+        SpatialOverview::setWorkspaceCanvasEnabled(workspace, false);
+        return RESULT;
+    }
+
+    auto* CANVAS = EXISTING ? dynamic_cast<CScrollOverview*>(EXISTING.get()) : nullptr;
+    if (CANVAS && CANVAS->isWorkspaceBoundCanvas() && CANVAS->workspaceCanvas() == workspace)
+        CANVAS->close();
+    else
+        SpatialOverview::restoreWorkspaceCanvasNative(workspace);
+    return {};
+}
+
+static SDispatchResult toggleWorkspaceCanvasHud(const PHLMONITOR& monitor, const PHLWORKSPACE& workspace) {
+    const auto OVERVIEW = monitor ? scrollOverviewForMonitor(monitor) : SP<IOverview>{};
+    auto* CANVAS = OVERVIEW ? dynamic_cast<CScrollOverview*>(OVERVIEW.get()) : nullptr;
+    if (!CANVAS || !workspace || CANVAS->isClosing() || !CANVAS->isWorkspaceBoundCanvas() || CANVAS->workspaceCanvas() != workspace ||
+        !SpatialOverview::workspaceCanvasEnabled(workspace))
+        return {};
+    CANVAS->toggleCanvasNavigation(true);
+    return {};
+}
+
+static SDispatchResult onWorkspaceCanvasDispatcher(const std::string& arg) {
+    const auto MONITOR   = Desktop::focusState()->monitor();
+    if (MONITOR && MONITOR->m_activeSpecialWorkspace)
+        return {}; // A special workspace owns input; do not toggle the workspace underneath it.
+    const auto WORKSPACE = MONITOR ? MONITOR->m_activeWorkspace : PHLWORKSPACE{};
+    if (arg == "hud toggle")
+        return toggleWorkspaceCanvasHud(MONITOR, WORKSPACE);
+    if (!WORKSPACE)
+        return {.success = false, .error = "No active workspace"};
+
+    const bool ENABLED = SpatialOverview::workspaceCanvasEnabled(WORKSPACE);
+    const bool WANT    = arg == "workspace toggle" ? !ENABLED : arg == "workspace open";
+    return setWorkspaceCanvasMode(MONITOR, WORKSPACE, WANT);
+}
+
 static SDispatchResult onCanvasDispatcher(std::string arg) {
+    if (arg == "workspace toggle" || arg == "workspace open" || arg == "workspace close" || arg == "hud toggle")
+        return onWorkspaceCanvasDispatcher(arg);
+
     if (arg.starts_with("experiment ")) {
         const auto PREVIOUS = SpatialOverview::Experiments::id();
         const auto NAME = arg.substr(11);
@@ -830,6 +1207,13 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         findFnOrThrow("renderWorkspace", {"CHyprRenderer::renderWorkspace(", "IHyprRenderer::renderWorkspace("}),
         rc<void*>(hkRenderWorkspace));
 
+    g_pScrollRenderWindowHook = HyprlandAPI::createFunctionHook(
+        SCROLLOVERVIEW_HANDLE, findFnOrThrow("renderWindow", {"IHyprRenderer::renderWindow("}), rc<void*>(hkRenderWindow));
+    g_pScrollWorkspaceWindowsHook = HyprlandAPI::createFunctionHook(
+        SCROLLOVERVIEW_HANDLE, findFnOrThrow("renderWorkspaceWindows", {"IHyprRenderer::renderWorkspaceWindows("}), rc<void*>(hkWorkspaceWindows));
+    g_pScrollWorkspaceFullscreenHook = HyprlandAPI::createFunctionHook(
+        SCROLLOVERVIEW_HANDLE, findFnOrThrow("renderWorkspaceWindowsFullscreen", {"IHyprRenderer::renderWorkspaceWindowsFullscreen("}), rc<void*>(hkWorkspaceFullscreen));
+
     g_pScrollScheduleFrameHook = HyprlandAPI::createFunctionHook(
         SCROLLOVERVIEW_HANDLE, 
         findFnOrThrow("_ZN7Monitor8CMonitor13scheduleFrameEN10Aquamarine7IOutput19scheduleFrameReasonE", {""}),
@@ -870,6 +1254,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         findFnOrThrow("drawTex", {"IElementRenderer::drawTex(Hyprutils::Memory::CWeakPointer<CTexPassElement>"}),
         rc<void*>(hkElementDrawTex));
 
+    g_pScrollDrawElementHook = HyprlandAPI::createFunctionHook(
+        SCROLLOVERVIEW_HANDLE,
+        findFnOrThrow("drawElement", {"IElementRenderer::drawElement(Hyprutils::Memory::CWeakPointer<IPassElement>"}),
+        rc<void*>(hkDrawElement));
+
     g_pBeginDragTargetHook = HyprlandAPI::createFunctionHook(SCROLLOVERVIEW_HANDLE,
                                                              findFnOrThrow("beginDragTarget", {"CLayoutManager::beginDragTarget("}),
                                                              rc<void*>(hkBeginDragTarget));
@@ -889,10 +1278,22 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
                                                              rc<void*>(hkPopupReposition));
 
     static auto P = Event::bus()->m_events.render.pre.listen([](PHLMONITOR monitor) {
-        if (const auto overview = scrollOverviewForMonitor(monitor))
+        const auto overview = scrollOverviewForMonitor(monitor);
+        if (overview)
             overview->onPreRender();
+        const auto* canvas = overview ? dynamic_cast<const CScrollOverview*>(overview.get()) : nullptr;
+        // This stage precedes beginRender's damage snapshot. A camera view
+        // owns the output-sized footprint, not its clients' source rectangles.
+        // Damage the current frame only; do not start an idle repaint loop.
+        if ((canvas && canvas->isWorkspaceBoundCanvas()) ||
+            std::ranges::any_of(workspaceTransitionOverviews(), [&](const auto& outgoing) {
+                return outgoing->pMonitor.lock() == monitor;
+            }))
+            monitor->m_damage.damageEntire();
     });
     static auto HUDSTAGE = Event::bus()->m_events.render.stage.listen([](eRenderStage stage) {
+        if (stage == RENDER_BEGIN)
+            SpatialOverview::BarrelShader::updateUniforms(0.F);
         if (stage == RENDER_LAST_MOMENT)
             SpatialOverview::BarrelShader::applyPendingHud();
     });
@@ -909,20 +1310,32 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // Fullscreen on the canvas: only the screen showing the window steps
     // aside, and comes back after (scrollOverview.cpp).
     static auto CANVASFULLSCREEN = Event::bus()->m_events.window.fullscreen.listen([](PHLWINDOW window) {
-        if (!g_unloading)
+        if (!g_unloading) {
             canvasFullscreenEvent(window);
+            scheduleWorkspaceCanvasSync();
+        }
     });
     static auto CANVASFULLSCREENCLOSE = Event::bus()->m_events.window.close.listen([](PHLWINDOW) {
-        if (!g_unloading)
+        if (!g_unloading) {
             canvasFullscreenEvent(nullptr);
+            scheduleWorkspaceCanvasSync();
+        }
     });
     static auto CANVASFULLSCREENMOVE = Event::bus()->m_events.window.moveToWorkspace.listen([](PHLWINDOW, PHLWORKSPACE) {
-        if (!g_unloading)
+        if (!g_unloading) {
             canvasFullscreenEvent(nullptr);
+            scheduleWorkspaceCanvasSync();
+        }
     });
     static auto CANVASFULLSCREENWORKSPACE = Event::bus()->m_events.workspace.active.listen([](PHLWORKSPACE) {
-        if (!g_unloading)
+        if (!g_unloading) {
             canvasFullscreenEvent(nullptr);
+            scheduleWorkspaceCanvasSync();
+        }
+    });
+    static auto WORKSPACECANVASREMOVED = Event::bus()->m_events.workspace.removed.listen([](auto workspaceRef) {
+        SpatialOverview::forgetWorkspaceCanvas(workspaceRef.lock());
+        scheduleWorkspaceCanvasSync();
     });
     // Screens given to a fullscreen window: a game hiding its cursor keeps
     // the pointer on its screen, and the pointer moving onto one focuses its
@@ -963,14 +1376,21 @@ APICALL EXPORT void PLUGIN_EXIT() {
     g_flightDeckIdle = nullptr;
     g_flightDeckRequest.reset();
     g_flightDeckNativePending = false;
+    if (g_workspaceCanvasSyncIdle) wl_event_source_remove(g_workspaceCanvasSyncIdle);
+    g_workspaceCanvasSyncIdle = nullptr;
+    if (g_workspaceCanvasTransitionTimer) wl_event_source_remove(g_workspaceCanvasTransitionTimer);
+    g_workspaceCanvasTransitionTimer = nullptr;
     g_pHyprRenderer->m_renderPass.removeAllOfType("CScrollOverviewPassElement");
 
     g_unloading = true;
     if (g_stateCommand)
         HyprlandAPI::unregisterHyprCtlCommand(SCROLLOVERVIEW_HANDLE, g_stateCommand);
     g_stateCommand.reset();
-    canvasFullscreenReset();
     clearScrollOverviews();
+    clearWorkspaceTransitionOverviews();
+    SpatialOverview::restoreWorkspaceCanvasNative();
+    canvasFullscreenReset();
+    SpatialOverview::clearWorkspaceCanvasModes();
     disableScrollOverviewHooks();
     canvasReleaseX11Windows();
 

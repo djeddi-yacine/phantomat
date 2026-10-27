@@ -19,8 +19,12 @@ struct SMinimapData {
     std::vector<std::array<float, 4>> windows;
     std::vector<float>                windowAlpha; // per window, 1 = normal emphasis
     int                               focusedIndex = -1;
-    std::array<float, 3>              activeColor{};
-    std::array<float, 3>              inactiveColor{};
+    std::array<float, 4>              activeColor{};
+    std::array<float, 4>              inactiveColor{};
+    std::array<float, 4>              panelColor{};
+    std::array<float, 4>              outlineColor{};
+    float                             rounding   = 0.F; // device pixels
+    float                             scale      = 1.F; // monitor scale
     float                             opacity    = 0.F;
     float                             transition = 0.F;
 };

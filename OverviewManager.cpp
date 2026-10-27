@@ -6,9 +6,14 @@
 #include <hyprland/src/output/Monitor.hpp>
 
 static std::vector<SP<IOverview>> g_scrollOverviews;
+static std::vector<SP<IOverview>> g_workspaceTransitionOverviews;
 
 const std::vector<SP<IOverview>>& scrollOverviews() {
     return g_scrollOverviews;
+}
+
+const std::vector<SP<IOverview>>& workspaceTransitionOverviews() {
+    return g_workspaceTransitionOverviews;
 }
 
 SP<IOverview> scrollOverviewForMonitor(PHLMONITOR monitor) {
@@ -60,8 +65,24 @@ void registerScrollOverview(const SP<IOverview>& overview) {
     if (!overview || std::ranges::find(g_scrollOverviews, overview) != g_scrollOverviews.end())
         return;
 
+    // An active renderer must no longer be eligible for transition cleanup.
+    releaseWorkspaceTransitionOverview(overview.get());
     g_scrollOverviews.emplace_back(overview);
     g_pScrollOverview = overview;
+}
+
+void retainWorkspaceTransitionOverview(const SP<IOverview>& overview) {
+    if (!overview || std::ranges::find(g_workspaceTransitionOverviews, overview) != g_workspaceTransitionOverviews.end())
+        return;
+
+    g_workspaceTransitionOverviews.emplace_back(overview);
+}
+
+void releaseWorkspaceTransitionOverview(IOverview* overview) {
+    if (!overview)
+        return;
+
+    std::erase_if(g_workspaceTransitionOverviews, [overview](const auto& candidate) { return candidate.get() == overview; });
 }
 
 void unregisterScrollOverview(IOverview* overview) {
@@ -82,5 +103,11 @@ void clearScrollOverviews() {
     auto overviews = std::move(g_scrollOverviews);
     g_scrollOverviews.clear();
     g_pScrollOverview.reset();
+    overviews.clear();
+}
+
+void clearWorkspaceTransitionOverviews() {
+    auto overviews = std::move(g_workspaceTransitionOverviews);
+    g_workspaceTransitionOverviews.clear();
     overviews.clear();
 }

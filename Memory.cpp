@@ -19,6 +19,7 @@
 namespace SpatialOverview::Memory {
     namespace {
         struct SEntry {
+            std::string workspace;
             std::string klass;
             std::string title;
             CBox        box;
@@ -68,9 +69,14 @@ namespace SpatialOverview::Memory {
                         if (sane(CAMERA.x, 1e6) && sane(CAMERA.y, 1e6))
                             g_cameras[fields[1]] = CAMERA;
                     } else if (fields.size() == 8 && fields[0] == "window") {
+                        // Existing shared-canvas entries have no workspace scope.
                         const CBox BOX{std::stod(fields[3]), std::stod(fields[4]), std::stod(fields[5]), std::stod(fields[6])};
                         if (saneBox(BOX))
-                            g_entries.push_back({.klass = fields[1], .title = fields[2], .box = BOX, .seen = std::stoll(fields[7])});
+                            g_entries.push_back({.workspace = {}, .klass = fields[1], .title = fields[2], .box = BOX, .seen = std::stoll(fields[7])});
+                    } else if (fields.size() == 9 && fields[0] == "window") {
+                        const CBox BOX{std::stod(fields[4]), std::stod(fields[5]), std::stod(fields[6]), std::stod(fields[7])};
+                        if (saneBox(BOX))
+                            g_entries.push_back({.workspace = fields[1], .klass = fields[2], .title = fields[3], .box = BOX, .seen = std::stoll(fields[8])});
                     }
                 } catch (...) {
                     // A damaged line only costs that one window its memory.
@@ -88,7 +94,7 @@ namespace SpatialOverview::Memory {
         return (base / "spatial-overview" / "canvas-memory.tsv").string();
     }
 
-    std::optional<CBox> claim(const PHLWINDOW& window, bool restoring) {
+    std::optional<CBox> claim(const PHLWINDOW& window, bool restoring, const std::string& workspace) {
         if (!window)
             return std::nullopt;
         load();
@@ -100,7 +106,7 @@ namespace SpatialOverview::Memory {
 
         SEntry* best = nullptr;
         for (auto& entry : g_entries) {
-            if (entry.window || entry.klass != KLASS)
+            if (entry.window || entry.workspace != workspace || entry.klass != KLASS)
                 continue;
             if (entry.title == TITLE && (!best || best->title != TITLE || entry.seen > best->seen))
                 best = &entry;
@@ -118,7 +124,9 @@ namespace SpatialOverview::Memory {
                 return std::nullopt;
             const auto& WINDOWS = Desktop::windowState()->windows();
             const bool  SIBLING = std::ranges::any_of(WINDOWS, [&](const PHLWINDOW& other) {
-                return other && other != window && other->m_isMapped && clean(other->m_class) == KLASS;
+                const auto OTHERWORKSPACE = other ? other->m_workspace : PHLWORKSPACE{};
+                const bool SAMEWORKSPACE = workspace.empty() || (OTHERWORKSPACE && workspace == "workspace:" + OTHERWORKSPACE->m_name);
+                return other && other != window && other->m_isMapped && clean(other->m_class) == KLASS && SAMEWORKSPACE;
             });
             if (SIBLING)
                 return std::nullopt;
@@ -147,7 +155,7 @@ namespace SpatialOverview::Memory {
             const auto KLASS = clean(placement.window->m_class.empty() ? placement.window->m_initialClass : placement.window->m_class);
             if (KLASS.empty())
                 continue;
-            next.push_back({.klass = KLASS, .title = clean(Navigator::displayTitle(placement.window)), .box = placement.box, .seen = NOW,
+            next.push_back({.workspace = clean(placement.workspace), .klass = KLASS, .title = clean(Navigator::displayTitle(placement.window)), .box = placement.box, .seen = NOW,
                             .window = placement.window->m_stableID});
         }
 
@@ -158,9 +166,13 @@ namespace SpatialOverview::Memory {
                     return placement.window && placement.window->m_stableID == entry.window;
                 }))
                 continue;
-            entry.window = 0;
+            // A partial workspace save does not release claims held by other live windows.
+            if (entry.workspace.empty() || (entry.window && !std::ranges::any_of(Desktop::windowState()->windows(), [&entry](const PHLWINDOW& window) {
+                    return window && window->m_isMapped && window->m_stableID == entry.window;
+                })))
+                entry.window = 0;
             const bool DUPLICATE = std::ranges::any_of(next, [&entry](const SEntry& current) {
-                return current.klass == entry.klass && current.title == entry.title && current.box == entry.box;
+                return current.workspace == entry.workspace && current.klass == entry.klass && current.title == entry.title && current.box == entry.box;
             });
             if (!DUPLICATE)
                 next.push_back(entry);
@@ -181,12 +193,12 @@ namespace SpatialOverview::Memory {
         std::ofstream out{TEMPORARY, std::ios::trunc};
         if (!out)
             return;
-        out << std::fixed << std::setprecision(1) << "# spatial-overview canvas memory v1\n";
+        out << std::fixed << std::setprecision(1) << "# spatial-overview canvas memory v2\n";
         for (const auto& [monitor, offset] : g_cameras)
             out << "camera\t" << clean(monitor) << '\t' << offset.x << '\t' << offset.y << '\n';
         for (const auto& entry : g_entries)
-            out << "window\t" << entry.klass << '\t' << entry.title << '\t' << entry.box.x << '\t' << entry.box.y << '\t' << entry.box.width << '\t' << entry.box.height
-                << '\t' << entry.seen << '\n';
+            out << "window\t" << clean(entry.workspace) << '\t' << entry.klass << '\t' << entry.title << '\t' << entry.box.x << '\t' << entry.box.y << '\t' << entry.box.width << '\t'
+                << entry.box.height << '\t' << entry.seen << '\n';
         out.close();
         if (out)
             std::filesystem::rename(TEMPORARY, path(), error);

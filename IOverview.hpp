@@ -47,14 +47,18 @@ class IOverview {
 };
 
 const std::vector<SP<IOverview>>& scrollOverviews();
+const std::vector<SP<IOverview>>& workspaceTransitionOverviews();
 SP<IOverview>                     scrollOverviewForMonitor(PHLMONITOR monitor);
 SP<IOverview>                     scrollOverviewAt(const Vector2D& point);
 SP<IOverview>                     activeScrollOverview();
 void                              closeAll();
 void                              registerScrollOverview(const SP<IOverview>& overview);
+void                              retainWorkspaceTransitionOverview(const SP<IOverview>& overview);
+void                              releaseWorkspaceTransitionOverview(IOverview* overview);
 void                              unregisterScrollOverview(IOverview* overview);
 void                              unregisterScrollOverviewForMonitor(PHLMONITOR monitor);
 void                              clearScrollOverviews();
+void                              clearWorkspaceTransitionOverviews();
 
 // Current interaction/render context. The authoritative state is the registry.
 inline SP<IOverview> g_pScrollOverview;

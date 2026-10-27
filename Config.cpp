@@ -1,9 +1,12 @@
 #include "Config.hpp"
+#include "Hud.hpp"
 #include "Tuning.hpp"
+#include "scrollOverview.hpp"
 
 #include <algorithm>
 #include <config/shared/complex/ComplexDataType.hpp>
 #include <config/shared/complex/ComplexDataTypes.hpp>
+#include <hyprland/src/config/lua/types/LuaConfigColor.hpp>
 #include <hyprland/src/config/values/types/BoolValue.hpp>
 #include <hyprland/src/config/values/types/ColorValue.hpp>
 #include <hyprland/src/config/values/types/FloatValue.hpp>
@@ -11,6 +14,8 @@
 #include <hyprland/src/config/values/types/StringValue.hpp>
 #include <hyprland/src/config/values/types/GradientValue.hpp>
 #include <hyprland/src/managers/KeybindManager.hpp>
+#include <hyprland/src/desktop/state/FocusState.hpp>
+#include <hyprland/src/output/Monitor.hpp>
 
 #include <regex>
 
@@ -71,9 +76,9 @@ SDispatcher* findDispatcher(const std::string_view name) {
         },
         {
             .name            = "canvas",
-            .argPattern      = std::regex{R"(^((place|viewport)[ \t]+-?[0-9]+[ \t]+-?[0-9]+|area[ \t]+[1-9][0-9]*|send[ \t]+[1-9][0-9]*([ \t]+stay)?|go[ \t]+([1-9][0-9]*|next|prev|back)|refresh|arrange|land|back|frame|undo|redo|fit|summon|tune|fill|pin|noop|search([ \t]+[^"\\]+)?|zoom[ \t]+(in|out)|(pan|nudge)[ \t]+(left|right|up|down)|native|maximize|fullscreen|restore|experiment[ \t]+(baseline|landing|labels|alttab|areas|quiet|persist|depth|lens|all|next|prev|status)|alttab[ \t]+(next|prev)|switch[ \t]+(next|prev))$)"},
+            .argPattern      = std::regex{R"(^((workspace[ \t]+(toggle|open|close)|hud[ \t]+toggle)|(place|viewport)[ \t]+-?[0-9]+[ \t]+-?[0-9]+|area[ \t]+[1-9][0-9]*|send[ \t]+[1-9][0-9]*([ \t]+stay)?|go[ \t]+([1-9][0-9]*|next|prev|back)|refresh|arrange|land|back|frame|undo|redo|fit|summon|tune|fill|pin|noop|search([ \t]+[^"\\]+)?|zoom[ \t]+(in|out)|(pan|nudge)[ \t]+(left|right|up|down)|native|maximize|fullscreen|restore|experiment[ \t]+(baseline|landing|labels|alttab|areas|quiet|persist|depth|lens|all|next|prev|status)|alttab[ \t]+(next|prev)|switch[ \t]+(next|prev))$)"},
             .typeArgError    = "expected a string argument",
-            .invalidArgError = "expected: search [text] | tune | fill | pin | noop | fit | summon | zoom in|out | pan/nudge left|right|up|down | undo | redo | arrange | land | back | frame | place <column> <row> | viewport <x> <y> | area <id> | go <place>|next|prev|back | send <place> [stay] | refresh | native | maximize | fullscreen | restore | experiment <name> | alttab next|prev | switch next|prev",
+            .invalidArgError = "expected: workspace toggle|open|close | hud toggle | search [text] | tune | fill | pin | noop | fit | summon | zoom in|out | pan/nudge left|right|up|down | undo | redo | arrange | land | back | frame | place <column> <row> | viewport <x> <y> | area <id> | go <place>|next|prev|back | send <place> [stay] | refresh | native | maximize | fullscreen | restore | experiment <name> | alttab next|prev | switch next|prev",
             .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "canvas"); },
         },
     };
@@ -187,6 +192,80 @@ int configureLua(lua_State* L) {
     return 0;
 }
 
+// Replace one complete output map, never publish partially validated colors.
+// Use the compositor's color parser, identical to native global color values.
+std::string parseOutputColors(lua_State* L, std::unordered_map<std::string, SpatialOverview::Hud::SOutputColors>& colors) {
+    using SpatialOverview::Hud::SOutputColors;
+    static constexpr std::pair<std::string_view, CHyprColor SOutputColors::*> ROLES[] = {
+        {"accent", &SOutputColors::accent}, {"panel", &SOutputColors::panel}, {"card", &SOutputColors::card}, {"edge", &SOutputColors::edge},
+        {"text", &SOutputColors::text}, {"text_dim", &SOutputColors::textDim}, {"text_faint", &SOutputColors::textFaint},
+    };
+    lua_pushnil(L);
+    while (lua_next(L, 1)) {
+        if (lua_type(L, -2) != LUA_TSTRING || lua_rawlen(L, -2) == 0 || !lua_istable(L, -1))
+            return "output_colors: expected nonempty output names mapped to complete color tables";
+        size_t length = 0;
+        const char* name = lua_tolstring(L, -2, &length);
+        const std::string OUTPUT{name, length};
+        const int TABLE = lua_absindex(L, -1);
+        SOutputColors palette;
+        for (const auto& [role, member] : ROLES) {
+            lua_getfield(L, TABLE, role.data());
+            ::Config::Lua::CLuaConfigColor value{0};
+            const auto RESULT = value.parse(L);
+            lua_pop(L, 1);
+            if (RESULT.errorCode != ::Config::Lua::PARSE_ERROR_OK)
+                return std::format("output_colors: {}.{}: {}", OUTPUT, role, RESULT.message);
+            palette.*member = CHyprColor{sc<uint64_t>(value.parsed())};
+        }
+        lua_pushnil(L);
+        while (lua_next(L, TABLE)) {
+            if (lua_type(L, -2) != LUA_TSTRING)
+                return std::format("output_colors: {}: expected named color roles", OUTPUT);
+            const std::string_view ROLE{lua_tostring(L, -2), lua_rawlen(L, -2)};
+            if (std::ranges::none_of(ROLES, [ROLE](const auto& entry) { return entry.first == ROLE; }))
+                return std::format("output_colors: {}: unknown color role '{}'", OUTPUT, ROLE);
+            lua_pop(L, 1);
+        }
+        colors.emplace(OUTPUT, palette);
+        lua_pop(L, 1);
+    }
+    return {};
+}
+
+int workspaceCanvasActiveLua(lua_State* L) {
+    if (lua_gettop(L) != 0)
+        return luaL_error(L, "workspace_canvas_active: expected no arguments");
+
+    const auto MONITOR = Desktop::focusState()->monitor();
+    const auto WORKSPACE = MONITOR ? MONITOR->m_activeWorkspace : PHLWORKSPACE{};
+    const auto OVERVIEW = MONITOR ? scrollOverviewForMonitor(MONITOR) : SP<IOverview>{};
+    const auto* CANVAS = OVERVIEW ? dynamic_cast<const CScrollOverview*>(OVERVIEW.get()) : nullptr;
+    const bool ACTIVE = MONITOR && !MONITOR->m_activeSpecialWorkspace && WORKSPACE && SpatialOverview::workspaceCanvasEnabled(WORKSPACE) &&
+        CANVAS && CANVAS->isWorkspaceBoundCanvas() && CANVAS->workspaceCanvas() == WORKSPACE && !CANVAS->isClosing();
+    lua_pushboolean(L, ACTIVE);
+    return 1;
+}
+
+int outputColorsLua(lua_State* L) {
+    if (lua_gettop(L) != 1 || !lua_istable(L, 1))
+        return luaL_error(L, "output_colors: expected one table keyed by output name");
+    bool valid = false;
+    {
+        std::unordered_map<std::string, SpatialOverview::Hud::SOutputColors> colors;
+        const auto ERROR = parseOutputColors(L, colors);
+        if (ERROR.empty()) {
+            SpatialOverview::Hud::setOutputColors(std::move(colors));
+            valid = true;
+        } else {
+            lua_settop(L, 1);
+            lua_pushlstring(L, ERROR.data(), ERROR.size());
+        }
+    }
+    // Lua errors longjmp: finish C++ object lifetimes before raising one.
+    return valid ? 0 : lua_error(L);
+}
+
 int gestureLua(lua_State* L) {
     if (!g_gestureRegistrar)
         return luaL_error(L, "gesture: registrar is not registered");
@@ -268,6 +347,9 @@ static void registerLuaFunctions() {
 
     HyprlandAPI::addLuaFunction(SCROLLOVERVIEW_HANDLE, "spatialoverview", "_dispatch", ::runDispatcherActionLua);
     HyprlandAPI::addLuaFunction(SCROLLOVERVIEW_HANDLE, "spatialoverview", "configure", ::configureLua);
+    HyprlandAPI::addLuaFunction(SCROLLOVERVIEW_HANDLE, "spatialoverview", "output_colors", ::outputColorsLua);
+    if (!HyprlandAPI::addLuaFunction(SCROLLOVERVIEW_HANDLE, "spatialoverview", "workspace_canvas_active", ::workspaceCanvasActiveLua))
+        throw std::runtime_error("[spatialoverview] Failed to register workspace_canvas_active");
     // Lets a config apply newer settings only when the loaded build knows
     // them: 2 = navigator, switcher, layout memory; 3 = live tuner, HUD and
     // lens settings, parallax.
@@ -351,6 +433,8 @@ static void registerConfigValues() {
     HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
                                   makeShared<CBoolValue>("plugin:spatialoverview:canvas:desktop_mode", "render one shared window canvas instead of workspace cards", false));
     HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
+                                  makeShared<CBoolValue>("plugin:spatialoverview:canvas:workspace_bound", "give each real Hyprland workspace an independent Canvas layout and camera", false));
+    HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
                                   makeShared<CBoolValue>("plugin:spatialoverview:canvas:persistent", "keep the canvas renderer active at normal zoom", false));
     HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
                                   makeShared<CBoolValue>("plugin:spatialoverview:canvas:linked_screens", "screens show adjacent parts of the canvas and move together, like one wide desk", true));
@@ -392,6 +476,9 @@ static void registerConfigValues() {
     HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
                                   makeShared<CIntValue>("plugin:spatialoverview:canvas:minimap_margin", "minimap edge margin in logical pixels", 24,
                                                         SIntValueOptions{.min = 0, .max = 128}));
+    HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
+                                  makeShared<CIntValue>("plugin:spatialoverview:canvas:minimap_rounding", "minimap corner radius; zero also squares its markers and controls", 14,
+                                                        SIntValueOptions{.min = 0, .max = 96}));
     HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
                                   makeShared<CFloatValue>("plugin:spatialoverview:canvas:minimap_opacity", "minimap background opacity", 0.72F,
                                                           SFloatValueOptions{.min = 0.F, .max = 1.F}));
@@ -513,6 +600,8 @@ static void registerConfigValues() {
     HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
                                   makeShared<CBoolValue>("plugin:spatialoverview:navigator:enabled", "type-to-search palette in the zoomed-out canvas", true));
     HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
+                                  makeShared<CBoolValue>("plugin:spatialoverview:navigator:auto_open", "open the type-to-search palette automatically when entering canvas navigation", true));
+    HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
                                   makeShared<CBoolValue>("plugin:spatialoverview:navigator:labels", "draw window titles on the zoomed-out canvas", true));
     HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
                                   makeShared<CFloatValue>("plugin:spatialoverview:navigator:dim_unmatched", "dimming of windows that do not match the search", 0.7F,
@@ -522,6 +611,18 @@ static void registerConfigValues() {
     HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
                                   makeShared<CStringValue>("plugin:spatialoverview:navigator:accent", "HUD accent color (#rrggbb), or auto to follow the active border", Hyprlang::STRING{"#ff6b1a"}));
     HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
+                                  makeShared<CColorValue>("plugin:spatialoverview:navigator:colors:panel", "HUD and minimap background", 0xFF0E0E0F));
+    HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
+                                  makeShared<CColorValue>("plugin:spatialoverview:navigator:colors:card", "HUD row background", 0xFF1B1B1C));
+    HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
+                                  makeShared<CColorValue>("plugin:spatialoverview:navigator:colors:edge", "HUD and minimap outline", 0x11FFFFFF));
+    HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
+                                  makeShared<CColorValue>("plugin:spatialoverview:navigator:colors:text", "HUD primary text", 0xFFEDEDED));
+    HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
+                                  makeShared<CColorValue>("plugin:spatialoverview:navigator:colors:text_dim", "HUD secondary text and inactive minimap markers", 0xFF8F8F91));
+    HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
+                                  makeShared<CColorValue>("plugin:spatialoverview:navigator:colors:text_faint", "HUD tertiary text", 0xFF5C5C5E));
+    HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
                                   makeShared<CStringValue>("plugin:spatialoverview:navigator:highlight", "unused; matches take the accent (kept so older configs load)", Hyprlang::STRING{""}));
     HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
                                   makeShared<CStringValue>("plugin:spatialoverview:navigator:font", "unused; the HUD is set in mono_font (kept so older configs load)", Hyprlang::STRING{""}));
@@ -529,6 +630,8 @@ static void registerConfigValues() {
                                   makeShared<CStringValue>("plugin:spatialoverview:navigator:mono_font", "HUD readout font", Hyprlang::STRING{"JetBrainsMono Nerd Font"}));
     HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
                                   makeShared<CBoolValue>("plugin:spatialoverview:canvas:remember_layout", "remember where windows live across restarts and reopenings", false));
+    HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
+                                  makeShared<CBoolValue>("plugin:spatialoverview:canvas:remember_overview", "restore each workspace's overview camera, zoom and search on return", false));
 
     SpatialOverview::Tuning::registerConfig();
 }
@@ -648,6 +751,10 @@ bool getCanvasDesktopMode() {
     return getValue<bool>("plugin:spatialoverview:canvas:desktop_mode");
 }
 
+bool getCanvasWorkspaceBound() {
+    return getValue<bool>("plugin:spatialoverview:canvas:workspace_bound");
+}
+
 bool getCanvasPlaces() {
     return getValue<bool>("plugin:spatialoverview:canvas:places");
 }
@@ -714,6 +821,10 @@ int getCanvasMinimapHeight() {
 
 int getCanvasMinimapMargin() {
     return std::clamp(getValue<int>("plugin:spatialoverview:canvas:minimap_margin"), 0, 128);
+}
+
+int getCanvasMinimapRounding() {
+    return std::clamp(getValue<int>("plugin:spatialoverview:canvas:minimap_rounding"), 0, 96);
 }
 
 float getCanvasMinimapOpacity() {
@@ -940,6 +1051,10 @@ bool getNavigatorEnabled() {
     return getValue<bool>("plugin:spatialoverview:navigator:enabled");
 }
 
+bool getNavigatorAutoOpen() {
+    return getValue<bool>("plugin:spatialoverview:navigator:auto_open");
+}
+
 bool getNavigatorLabels() {
     return getValue<bool>("plugin:spatialoverview:navigator:labels");
 }
@@ -962,6 +1077,10 @@ std::string getNavigatorMonoFont() {
 
 bool getCanvasRememberLayout() {
     return getValue<bool>("plugin:spatialoverview:canvas:remember_layout");
+}
+
+bool getCanvasRememberOverview() {
+    return getValue<bool>("plugin:spatialoverview:canvas:remember_overview");
 }
 
 }

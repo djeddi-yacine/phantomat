@@ -8,6 +8,7 @@
 
 #include <array>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace Render {
@@ -44,8 +45,14 @@ namespace SpatialOverview::Hud {
         std::string signature;  // all of the above, for texture cache keys
     };
 
+    struct SOutputColors {
+        CHyprColor accent, panel, card, edge, text, textDim, textFaint;
+    };
+
     const STheme& theme();
     void          refreshTheme();
+    void          setOutputColors(std::unordered_map<std::string, SOutputColors> colors);
+    void          beginFrame(const std::string& monitorName);
 
     struct SPaletteView {
         Vector2D    monitorSize; // logical
@@ -80,7 +87,7 @@ namespace SpatialOverview::Hud {
     // PALETTE_MISS outside it.
     constexpr int PALETTE_PANEL = -1;
     constexpr int PALETTE_MISS  = -2;
-    int           paletteHit(const Vector2D& point, PHLWINDOW* window = nullptr);
+    int           paletteHit(const std::string& monitorName, const Vector2D& point, PHLWINDOW* window = nullptr);
 
     struct SLabel {
         SP<Render::ITexture> texture;
