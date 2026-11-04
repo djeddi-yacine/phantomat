@@ -190,6 +190,8 @@ class CScrollOverview : public IOverview {
     void   leaveNavigatorPointer();
     Vector2D canvasCameraOffsetFor(const PHLWINDOW& window, float zoom, bool navigating) const;
     void   renderNavigatorWindowOverlay(Render::CRenderContext& ctx, PHLMONITOR monitor, PHLWINDOW window, const CBox& windowBox);
+    PHLWINDOW selectionOutlineWindow() const;
+    void   queueSelectionOutline(Render::CRenderContext& ctx, PHLMONITOR monitor, const PHLWINDOW& window, const CBox& box);
     void   renderNavigatorReticle(Render::CRenderContext& ctx, PHLMONITOR monitor, const Time::steady_tp& now);
     void   renderNavigatorHud(Render::CRenderContext& ctx, PHLMONITOR monitor);
     CBox   canvasArrangeButtonBox() const;
@@ -209,6 +211,7 @@ class CScrollOverview : public IOverview {
     double trackpadWorkspaceScrollOffset(PHLMONITOR monitor, float renderScale);
     bool   scrollStepAllowed(uint32_t timeMs);
     bool   selectOverviewWindow(PHLWINDOW window, size_t workspaceIdx, bool syncFocus = false);
+    void   selectCanvasWindowAtPress();
     bool   selectWindowAtOverviewCursor(bool syncFocus = false);
     PHLWINDOW windowClosestToWorkspaceCenter(size_t workspaceIdx) const;
     void   rememberSelection(PHLWINDOW window);
@@ -230,6 +233,7 @@ class CScrollOverview : public IOverview {
     PHLWORKSPACE workspaceAtOverviewPoint(const Vector2D& point, size_t* workspaceIdx = nullptr) const;
     PHLWORKSPACE workspaceAtOverviewDropPoint(const Vector2D& point, size_t* workspaceIdx = nullptr, const PHLWINDOW& draggedWindow = nullptr) const;
     PHLWORKSPACE workspaceAtOverviewCursor(size_t* workspaceIdx = nullptr) const;
+    float        overviewPreviewScale() const;
     CBox         canvasDesktopWindowBox(const PHLWINDOW& window) const;
     PHLWINDOW    canvasDesktopWindowAtPoint(const Vector2D& point, CBox* renderedBox = nullptr, Vector2D* surfaceLocal = nullptr) const;
     void         zoomCanvasAt(const Vector2D& point, float requestedZoom, bool animate = false);
@@ -245,6 +249,7 @@ class CScrollOverview : public IOverview {
     Vector2D     canvasCellAtOverviewPoint(const Vector2D& point) const;
     CBox         snapCanvasWindowBox(const CBox& box, PHLMONITOR monitor) const;
     Vector2D  overviewPointToGlobal(size_t workspaceIdx, const Vector2D& pointLocal) const;
+    std::optional<CBox> canvasDragWorldBox(size_t workspaceIdx, const Vector2D& pointLocal) const;
     CBox      draggedWindowBox(size_t workspaceIdx) const;
     CBox      draggedWindowBoxFor(PHLWINDOW window, size_t workspaceIdx, const Vector2D& pointLocal, const Vector2D& grabRatio) const;
     CBox      draggedWindowGlobalBox() const;
@@ -340,6 +345,7 @@ class CScrollOverview : public IOverview {
     PHLWINDOWREF                     resizeActiveWindow;
 
     Vector2D                         dragStartMouseLocal   = Vector2D{};
+    Vector2D                         dragStartWorld        = Vector2D{}; // world point under the pointer at drag start
     Vector2D                         dragGrabOffsetLocal   = Vector2D{};
     Vector2D                         dragGrabRatio         = Vector2D{0.5, 0.5};
     Vector2D                         dragOriginalFloatSize = Vector2D{};

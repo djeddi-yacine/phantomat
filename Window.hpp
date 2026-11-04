@@ -25,6 +25,8 @@ struct SRenderParams {
     bool                  dragged              = false;
     bool                  cameraTransform      = false;
     PHLWINDOW             pseudoFocusWindow;
+    // Overview-only preview shrink; windowBox is already the shrunk box.
+    float                 previewScale = 1.F;
 };
 
 void renderOverviewWindow(Render::CRenderContext& ctx, const SRenderParams& params);

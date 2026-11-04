@@ -48,6 +48,7 @@
 #include <hyprland/src/desktop/view/Group.hpp>
 #include <hyprland/src/workspace/RegularWorkspace.hpp>
 #include <hyprland/src/layout/target/WindowTarget.hpp>
+#include <hyprutils/string/String.hpp>
 #include <hyprland/src/desktop/view/window/Window.hpp>
 #include <hyprland/src/desktop/view/WLSurface.hpp>
 #include <hyprland/src/desktop/view/LayerSurface.hpp>
@@ -2195,6 +2196,8 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
 
                 dragPendingPrimary  = true;
                 dragStartMouseLocal = lastMousePosLocal;
+                if (isCanvasDesktop() && navigatorOwnsPointer())
+                    selectCanvasWindowAtPress();
                 return;
             }
 
@@ -3818,6 +3821,56 @@ void CScrollOverview::refreshCanvasSettings() {
     damage();
 }
 
+// canvas:overview_client_scale for one monitor: empty derives it from the
+// output's pixel size, "0.5" sets every monitor, "DP-1:0.45,HDMI-A-1:0.6"
+// sets monitors by name (others derive theirs).
+static float overviewClientScaleFor(const PHLMONITOR& monitor) {
+    if (!monitor)
+        return 1.F;
+
+    const auto  SPEC   = ScrollOverview::Config::getOverviewClientScale();
+    std::string source = "auto";
+    float       value  = std::clamp(sc<float>(std::min(monitor->m_pixelSize.x / 2560.0, monitor->m_pixelSize.y / 1440.0)), 0.2F, 1.F);
+    std::istringstream entries{SPEC};
+    for (std::string entry; std::getline(entries, entry, ',');) {
+        const auto COLON = entry.find(':');
+        const auto NAME  = COLON == std::string::npos ? std::string{} : Hyprutils::String::trim(entry.substr(0, COLON));
+        const auto VALUE = Hyprutils::String::trim(COLON == std::string::npos ? entry : entry.substr(COLON + 1));
+        if (VALUE.empty() || (!NAME.empty() && NAME != monitor->m_name))
+            continue;
+        try {
+            value  = std::stof(VALUE);
+            source = NAME.empty() ? "all" : "output";
+        } catch (...) { continue; }
+        if (!NAME.empty())
+            break; // a named entry beats a global one
+    }
+    value = std::clamp(value, 0.1F, 1.F);
+
+    static std::unordered_map<std::string, float> logged;
+    if (const auto IT = logged.find(monitor->m_name); IT == logged.end() || IT->second != value) {
+        logged[monitor->m_name] = value;
+        Log::logger->log(Log::INFO, "spatialoverview", "overview_client_scale {} -> {:.2f} ({})", monitor->m_name, value, source);
+    }
+    return value;
+}
+
+// Previews shrink around their centre while the overview is shown; world
+// position, camera targeting and the real client are untouched.
+static CBox shrinkOverviewPreviewBox(const CBox& box, float previewScale) {
+    if (previewScale >= 1.F)
+        return box;
+    const auto SIZE = box.size() * previewScale;
+    return CBox{box.middle() - SIZE / 2.0, SIZE};
+}
+
+float CScrollOverview::overviewPreviewScale() const {
+    if (!isCanvasDesktop())
+        return 1.F;
+    const float FULL = overviewClientScaleFor(pMonitor.lock());
+    return 1.F - (1.F - FULL) * overviewProgress();
+}
+
 CBox CScrollOverview::canvasDesktopWindowBox(const PHLWINDOW& window) const {
     const auto MONITOR = pMonitor.lock();
     if (!MONITOR || !canvasWindowInWorkspace(window))
@@ -3827,8 +3880,9 @@ CBox CScrollOverview::canvasDesktopWindowBox(const PHLWINDOW& window) const {
     if (!shouldShowOverviewWindow(window))
         return {};
 
-    return getOverviewGlobalBox(window->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT), MONITOR, scale->value(), viewOffset->value(), Vector2D{}, layout,
-                                false);
+    return shrinkOverviewPreviewBox(
+        getOverviewGlobalBox(window->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT), MONITOR, scale->value(), viewOffset->value(), Vector2D{}, layout, false),
+        overviewPreviewScale());
 }
 
 CBox CScrollOverview::canvasWorldToScreen(const CBox& world) const {
@@ -5649,6 +5703,21 @@ bool CScrollOverview::selectOverviewWindow(PHLWINDOW window, size_t workspaceIdx
     return true;
 }
 
+// Canvas navigation selects on press: the client under the pointer gets the
+// outline, focus and the top of the stack at once, before any drag. Release
+// resolves the same client again, so it is idempotent.
+void CScrollOverview::selectCanvasWindowAtPress() {
+    size_t     workspaceIdx = viewportCurrentWorkspace;
+    const auto WINDOW       = getOverviewWindowToShow(windowAtOverviewCursor(&workspaceIdx));
+    if (!shouldShowOverviewWindow(WINDOW))
+        return;
+
+    selectOverviewWindow(WINDOW, workspaceIdx, true);
+    (void)Config::Actions::alterZOrder("top", WINDOW);
+    navigatorHoverWindow.reset();
+    damage();
+}
+
 bool CScrollOverview::selectWindowAtOverviewCursor(bool syncFocus) {
     lastMousePosLocal = getOverviewMousePosLocal(pMonitor.lock());
 
@@ -5714,11 +5783,23 @@ Vector2D CScrollOverview::overviewPointToGlobal(size_t workspaceIdx, const Vecto
         VIEWPORT_CENTER_LOGICAL + MONITOR->m_position;
 }
 
+// Where a canvas drag puts the client in world space: the box it had at
+// press time, moved by the pointer's travel. Drawing and dropping both use it,
+// so the client lands exactly where its preview was released.
+std::optional<CBox> CScrollOverview::canvasDragWorldBox(size_t workspaceIdx, const Vector2D& pointLocal) const {
+    if (!isCanvasDesktop() || dragOriginalBox.width <= 0 || dragOriginalBox.height <= 0)
+        return std::nullopt;
+    return CBox{dragOriginalBox.pos() + overviewPointToGlobal(workspaceIdx, pointLocal) - dragStartWorld, dragOriginalBox.size()};
+}
+
 CBox CScrollOverview::draggedWindowBox(size_t workspaceIdx) const {
     const auto WINDOW  = getOverviewWindowToShow(dragActiveWindow.lock());
     const auto MONITOR = pMonitor.lock();
     if (!WINDOW || !MONITOR || workspaceIdx >= images.size())
         return {};
+
+    if (const auto WORLD = canvasDragWorldBox(workspaceIdx, lastMousePosLocal))
+        return shrinkOverviewPreviewBox(getOverviewGlobalBox(*WORLD, MONITOR, scale->value(), viewOffset->value(), Vector2D{}, layout, false), overviewPreviewScale());
 
     const auto WORKSPACE_OFFSET = workspaceOverviewOffset(workspaceIdx, activeWorkspaceIndex(), getWorkspaceRenderedPitch(MONITOR, scale->value(), layout));
     auto       box               = getOverviewDragWindowBox(WINDOW, MONITOR, scale->value(), viewOffset->value(), WORKSPACE_OFFSET, layout);
@@ -5932,6 +6013,7 @@ void CScrollOverview::beginWindowDrag(PHLWINDOW window) {
         const auto WORKSPACEOFFSET = workspaceOverviewOffset(workspaceIdx, activeWorkspaceIndex(), getWorkspaceRenderedPitch(MONITOR, scale->value(), layout));
         const auto WINDOWBOX       = getOverviewDragWindowBox(WINDOW, MONITOR, scale->value(), viewOffset->value(), WORKSPACEOFFSET, layout);
         dragGrabOffsetLocal        = dragStartMouseLocal - WINDOWBOX.pos();
+        dragStartWorld             = overviewPointToGlobal(workspaceIdx, dragStartMouseLocal);
         dragGrabRatio              = Vector2D{
             WINDOWBOX.width > 0.0 ? dragGrabOffsetLocal.x / WINDOWBOX.width : 0.5,
             WINDOWBOX.height > 0.0 ? dragGrabOffsetLocal.y / WINDOWBOX.height : 0.5,
@@ -6570,21 +6652,34 @@ void CScrollOverview::endWindowDrag() {
     } else if (TARGET && (!dragStartedTiled || EMPTYCANVASDROP)) {
         const auto workspaceIdx = dragWorkspaceIndex(WINDOW);
 
-        const auto FLOATBOX   = draggedWindowBox(workspaceIdx);
-        const auto GLOBALPOS  = overviewPointToGlobal(workspaceIdx, FLOATBOX.pos());
-        const auto GLOBALSIZE = FLOATBOX.size() * (1.F / (std::max(scale->value(), 0.01F) * std::max(MONITOR ? MONITOR->m_scale : 1.F, 0.01F)));
-        auto       GLOBALBOX  = CBox{GLOBALPOS, GLOBALSIZE};
         const auto WORKSPACE  = workspaceIdx < images.size() && images[workspaceIdx] ? images[workspaceIdx]->pWorkspace : WINDOW->m_workspace;
+        CBox       GLOBALBOX;
 
-        if (!ScrollOverview::Config::getCanvasEnabled() || !ScrollOverview::Config::getCanvasAllowWindowOverflow())
-            GLOBALBOX = clampBoxToWorkspace(GLOBALBOX, WORKSPACE, MONITOR, WINDOW->presentation().borderSize());
-        else
-            GLOBALBOX = snapCanvasWindowBox(GLOBALBOX, MONITOR);
+        // A canvas drop is pixel-exact at the release point read now, not at
+        // the last motion sample, and is never snapped. overflow=false still
+        // keeps it on its workspace.
+        lastMousePosLocal = DROPPOINTLOCAL;
+        if (const auto WORLD = canvasDragWorldBox(workspaceIdx, DROPPOINTLOCAL)) {
+            GLOBALBOX = *WORLD;
+            if (!ScrollOverview::Config::getCanvasAllowWindowOverflow())
+                GLOBALBOX = clampBoxToWorkspace(GLOBALBOX, WORKSPACE, MONITOR, WINDOW->presentation().borderSize());
+        } else {
+            const auto FLOATBOX   = draggedWindowBox(workspaceIdx);
+            const auto GLOBALPOS  = overviewPointToGlobal(workspaceIdx, FLOATBOX.pos());
+            const auto GLOBALSIZE = FLOATBOX.size() * (1.F / (std::max(scale->value(), 0.01F) * std::max(MONITOR ? MONITOR->m_scale : 1.F, 0.01F)));
+            GLOBALBOX             = CBox{GLOBALPOS, GLOBALSIZE};
+            if (!ScrollOverview::Config::getCanvasEnabled() || !ScrollOverview::Config::getCanvasAllowWindowOverflow())
+                GLOBALBOX = clampBoxToWorkspace(GLOBALBOX, WORKSPACE, MONITOR, WINDOW->presentation().borderSize());
+            else
+                GLOBALBOX = snapCanvasWindowBox(GLOBALBOX, MONITOR);
+        }
 
         TARGET->damageEntire();
         TARGET->setPositionGlobal(GLOBALBOX);
         TARGET->warpPositionSize();
         TARGET->damageEntire();
+        // The dropped client ends up above whatever it landed on.
+        (void)Config::Actions::alterZOrder("top", WINDOW);
     }
 
     if (RESTORESOURCEFULLSCREENFOCUS) {
@@ -8235,6 +8330,7 @@ void CScrollOverview::renderCanvasDesktopScene(Render::CRenderContext& ctx, PHLM
     });
 
     std::unordered_set<const void*> rendered;
+    const auto                      OUTLINEWINDOW = selectionOutlineWindow();
     const auto renderPass = [&](bool floating) {
         for (const auto& windowRef : Desktop::windowState()->windows()) {
             const auto WINDOW = getOverviewWindowToShow(windowRef);
@@ -8252,12 +8348,13 @@ void CScrollOverview::renderCanvasDesktopScene(Render::CRenderContext& ctx, PHLM
             noteCanvasWindowedBox(WINDOW);
             renderWindowLive(ctx, monitor, WINDOW, WINDOWBOX, renderScale, now);
             renderNavigatorWindowOverlay(ctx, monitor, WINDOW, WINDOWBOX);
+            if (WINDOW == OUTLINEWINDOW)
+                queueSelectionOutline(ctx, monitor, WINDOW, WINDOWBOX);
         }
     };
 
     renderPass(false);
     renderPass(true);
-    renderNavigatorReticle(ctx, monitor, now); // same workspace displacement and finite camera clip as its client
     OverviewRender::flushPass(ctx, monitor);
     // Pinned clients and X11 menus stay in native screen coordinates.
     OverviewRender::canvasViewportClip = previousClip;
@@ -8327,6 +8424,16 @@ void CScrollOverview::renderDraggedWindow(Render::CRenderContext& ctx, PHLMONITO
     const auto WINDOW    = getOverviewWindowToShow(dragOwner->dragActiveWindow.lock());
     if (!shouldShowOverviewWindow(WINDOW) || !WINDOW->m_workspace)
         return;
+
+    if (dragOwner == this && isCanvasDesktop()) {
+        const auto BOX = draggedWindowBox(dragWorkspaceIndex(WINDOW));
+        if (BOX.empty() || !overviewBoxIntersectsMonitor(BOX, monitor))
+            return;
+        renderWindowLive(ctx, monitor, WINDOW, BOX, scale->value(), now, nullptr, true);
+        if (ScrollOverview::Config::getNavigatorLabelDrag())
+            renderNavigatorWindowOverlay(ctx, monitor, WINDOW, BOX); // keep its title on the card
+        return;
+    }
 
     const auto GLOBALBOX  = dragOwner->draggedWindowGlobalBox();
     const auto MONITORBOX = monitor ? monitor->logicalBox() : CBox{};
@@ -8463,6 +8570,7 @@ void CScrollOverview::renderWindowLive(Render::CRenderContext& ctx, PHLMONITOR m
         .dragged              = dragged,
         .cameraTransform      = isCanvasDesktop() && !dragged,
         .pseudoFocusWindow    = PSEUDOFOCUSWINDOW,
+        .previewScale         = canvasScreenFixedWindow(window) ? 1.F : overviewPreviewScale(),
     });
 }
 
@@ -9818,6 +9926,8 @@ void CScrollOverview::render(Render::CRenderContext& ctx) {
         OverviewRender::flushPass(ctx, MONITOR);
         renderCanvasDesktopScene(ctx, MONITOR, SCALE, NOW, true);
         renderDraggedWindow(ctx, MONITOR, ACTIVEIDX, PITCH, SCALE, NOW);
+        renderNavigatorReticle(ctx, MONITOR, NOW);
+        OverviewRender::flushPass(ctx, MONITOR);
         renderExperimentChrome(ctx, MONITOR);
         renderCanvasViewport(ctx, MONITOR, SCALE);
         renderCanvasMinimap(ctx, MONITOR);
@@ -11242,13 +11352,16 @@ void CScrollOverview::updateNavigatorHover() {
     const auto MONITOR = pMonitor.lock();
     const auto RAW     = MONITOR ? (g_pInputManager->getMouseCoordsInternal() - MONITOR->m_position) * MONITOR->m_scale : Vector2D{};
     const bool OVERHUD = MONITOR && showsNavigatorHud() && SpatialOverview::Hud::paletteHit(MONITOR->m_name, RAW) != SpatialOverview::Hud::PALETTE_MISS;
-    const auto WINDOW  = OVERHUD ? PHLWINDOW{} : canvasDesktopWindowAtPoint(lastMousePosLocal);
+    // While a client is held (dragged, or pressed and not yet released) no
+    // other client lights up under the pointer.
+    const bool HOLDING = dragActiveWindow || dragPendingPrimary;
+    const auto WINDOW  = OVERHUD || HOLDING ? PHLWINDOW{} : canvasDesktopWindowAtPoint(lastMousePosLocal);
     if (WINDOW != navigatorHoverWindow.lock()) {
         navigatorHoverWindow = WINDOW;
         damage();
     }
 
-    if (dragActiveWindow || scrollingPanPointerDown)
+    if (HOLDING || scrollingPanPointerDown)
         setCanvasCursor("grabbing");
     else if (OVERHUD && SpatialOverview::Hud::paletteHit(MONITOR->m_name, RAW) >= 0)
         setCanvasCursor("pointer");
@@ -11344,39 +11457,61 @@ void CScrollOverview::renderNavigatorWindowOverlay(Render::CRenderContext& ctx, 
     Render::IHyprRenderer::addPassElement(ctx, makeUnique<CTexPassElement>(data));
 }
 
-void CScrollOverview::renderNavigatorReticle(Render::CRenderContext& ctx, PHLMONITOR monitor, const Time::steady_tp& now) {
+// The client the HUD selection outline belongs to, or nothing.
+PHLWINDOW CScrollOverview::selectionOutlineWindow() const {
     const bool FROZEN = workspaceSwitchClose && navigatorFrame;
-    if (!monitor || !isCanvasNavigationActive() ||
+    if (!isCanvasNavigationActive() ||
         (!FROZEN && (!SpatialOverview::Navigator::isOpen() || (workspaceBoundCanvas && !SpatialOverview::Navigator::belongsToWorkspace(startedOn)))))
+        return nullptr;
+
+    const auto WINDOW = FROZEN ? navigatorFrame->selected.lock() : getOverviewWindowToShow(Desktop::focusState()->window());
+    if (!shouldShowOverviewWindow(WINDOW) || !canvasWindowInWorkspace(WINDOW) || windowPinned(WINDOW) || !navigatorFrameMatches(WINDOW))
+        return nullptr;
+    return WINDOW;
+}
+
+// A crisp accent outline standing a few pixels off the preview, like the
+// selected card in the palette. Queued right after its client in the scene, so
+// clients drawn above it cover the outline as well.
+void CScrollOverview::queueSelectionOutline(Render::CRenderContext& ctx, PHLMONITOR monitor, const PHLWINDOW& window, const CBox& box) {
+    const float FADE = overviewProgress() * workspaceHudOpacity();
+    if (!monitor || !window || FADE <= 0.01F || box.empty() || !overviewBoxIntersectsMonitor(box.copy().expand(16.F), monitor))
         return;
 
-    const float FADE   = overviewProgress() * workspaceHudOpacity();
-    const auto  WINDOW = FROZEN ? navigatorFrame->selected.lock() : getOverviewWindowToShow(Desktop::focusState()->window());
-    if (FADE <= 0.01F || !shouldShowOverviewWindow(WINDOW) || !canvasWindowInWorkspace(WINDOW) || windowPinned(WINDOW) || !navigatorFrameMatches(WINDOW))
-        return;
-
-    auto BOX = canvasDesktopWindowBox(WINDOW);
-    if (workspaceBoundCanvas)
-        BOX.translate(startedOn->m_renderOffset->value() * monitor->m_scale);
-    if (BOX.empty() || !overviewBoxIntersectsMonitor(BOX.copy().expand(16.F), monitor))
-        return;
-
-    // A crisp accent outline standing a few pixels off the window, like the
-    // selected card in the palette.
     const float SCALE    = std::max(monitor->m_scale, 0.01F);
-    const int   ROUNDING = std::max(0, sc<int>(std::round(WINDOW->presentation().rounding() * SCALE * scale->value())));
+    const int   ROUNDING = std::max(0, sc<int>(std::round(window->presentation().rounding() * SCALE * scale->value() * overviewPreviewScale())));
     const float GAP      = std::round(4.F * SCALE);
 
     CBorderPassElement::SBorderData border;
-    border.box           = BOX.copy().expand(GAP).round();
-    border.grad1         = Config::CGradientValueData{SpatialOverview::Hud::theme().accent};
-    border.a             = FADE;
-    border.borderSize    = std::max(2, sc<int>(std::round(2.F * SCALE)));
+    border.box        = box.copy().expand(GAP).round();
+    border.grad1      = Config::CGradientValueData{SpatialOverview::Hud::theme().accent};
+    border.a          = FADE;
+    border.borderSize = std::max(2, sc<int>(std::round(2.F * SCALE)));
     // Expanding a square window must not manufacture rounded selection corners.
     border.round         = ROUNDING > 0 ? ROUNDING + sc<int>(GAP) : 0;
     border.outerRound    = ROUNDING > 0 ? border.round + border.borderSize : 0;
     border.roundingPower = 2.F;
     Render::IHyprRenderer::addPassElement(ctx, makeUnique<CBorderPassElement>(border));
+}
+
+// The reticle of a client that is being dragged, drawn after the scene so it
+// stays above everything (navigator:drag_behavior).
+void CScrollOverview::renderNavigatorReticle(Render::CRenderContext& ctx, PHLMONITOR monitor, const Time::steady_tp& now) {
+    const auto WINDOW = selectionOutlineWindow();
+    if (!monitor || !WINDOW || WINDOW != getOverviewWindowToShow(dragActiveWindow.lock()))
+        return;
+
+    CBox box;
+    switch (ScrollOverview::Config::getNavigatorDragBehavior()) {
+        case ScrollOverview::Config::EDragBehavior::HIDDEN: return;
+        case ScrollOverview::Config::EDragBehavior::FOLLOW: box = draggedWindowBox(dragWorkspaceIndex(WINDOW)); break;
+        case ScrollOverview::Config::EDragBehavior::JUMP:
+            box = canvasDesktopWindowBox(WINDOW);
+            if (workspaceBoundCanvas)
+                box.translate(startedOn->m_renderOffset->value() * monitor->m_scale);
+            break;
+    }
+    queueSelectionOutline(ctx, monitor, WINDOW, box);
 }
 
 void CScrollOverview::renderNavigatorHud(Render::CRenderContext& ctx, PHLMONITOR monitor) {

@@ -670,9 +670,13 @@ void forceDecoRecalc(const PHLWINDOW& window) {
     WINDOW->presentation().updateDecorations();
 }
 
-void renderOverviewWindow(Render::CRenderContext& ctx, const SRenderParams& params) {
-    if (!params.window)
+void renderOverviewWindow(Render::CRenderContext& ctx, const SRenderParams& previewParams) {
+    if (!previewParams.window)
         return;
+
+    // Surface, border, rounding and shadow all shrink with the preview.
+    auto params = previewParams;
+    params.renderScale *= std::clamp(params.previewScale, 0.1F, 1.F);
 
     const SOverviewPseudoFocusState pseudoFocusState{params.window, params.pseudoFocusWindow};
     const auto colors = getOverviewDecorationColors(params.window, isOverviewActiveWindow(params.window, params.pseudoFocusWindow));
