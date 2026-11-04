@@ -47,6 +47,7 @@
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/view/Group.hpp>
 #include <hyprland/src/workspace/RegularWorkspace.hpp>
+#include <hyprland/src/layout/target/WindowTarget.hpp>
 #include <hyprland/src/desktop/view/window/Window.hpp>
 #include <hyprland/src/desktop/view/WLSurface.hpp>
 #include <hyprland/src/desktop/view/LayerSurface.hpp>
@@ -293,8 +294,6 @@ static std::string canvasMemoryKey(const PHLWORKSPACE& workspace, const PHLMONIT
 
 // The first canvas of a compositor session restores remembered homes for a
 // short while, so apps started at login find their places as they appear.
-static bool            g_canvasMemoryStarted     = false;
-static Time::steady_tp g_canvasMemoryRestoreUntil = {};
 static wl_event_source* g_canvasMemoryTimer       = nullptr;
 extern void requestFlightDeckNative(PHLWINDOW window, Fullscreen::eFullscreenMode mode);
 void        canvasReleaseX11Windows();
@@ -1620,16 +1619,9 @@ static void saveWorkspaceCanvasMemory(const CScrollOverview& canvas) {
     if (!canvas.isWorkspaceBoundCanvas() || !ScrollOverview::Config::getCanvasRememberLayout())
         return;
 
-    const auto SCOPE = canvasMemoryKey(canvas.workspaceCanvas(), canvas.canvasMonitor(), true);
-    std::vector<SpatialOverview::Memory::SWindowPlacement> placements;
-    for (const auto& windowRef : Desktop::windowState()->windows()) {
-        const auto WINDOW = getOverviewWindowToShow(windowRef);
-        if (!shouldShowOverviewWindow(WINDOW) || !canvas.canvasWindowInWorkspace(WINDOW) || windowPinned(WINDOW) || !WINDOW->layoutTarget() || !WINDOW->layoutTarget()->floating())
-            continue;
-        placements.push_back({.window = WINDOW, .box = WINDOW->layoutTarget()->position(), .workspace = SCOPE});
-    }
+    const auto SCOPE  = canvasMemoryKey(canvas.workspaceCanvas(), canvas.canvasMonitor(), true);
     const auto CAMERA = canvas.isCanvasNavigationActive() && canvas.hasNavigationReturn ? canvas.navigationReturnOffset : canvas.restingCameraOffset();
-    SpatialOverview::Memory::save(placements, {{SCOPE, CAMERA}});
+    SpatialOverview::Memory::save({{SCOPE, CAMERA}});
 }
 
 CScrollOverview::~CScrollOverview() {
@@ -2689,6 +2681,7 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     touchDownHook   = Event::bus()->m_events.input.touch.down.listen(onCursorSelect);
 
     windowOpenHook      = Event::bus()->m_events.window.open.listen(onWindowOpen);
+    windowOpenEarlyHook = Event::bus()->m_events.window.openEarly.listen([this](PHLWINDOW window) { prepareCanvasWindowEarly(window); });
     windowCloseHook     = Event::bus()->m_events.window.close.listen(onWindowClose);
     windowMoveHook      = Event::bus()->m_events.window.moveToWorkspace.listen(onWindowMove);
     windowActiveHook    = Event::bus()->m_events.window.active.listen(onWindowActive);
@@ -2706,10 +2699,6 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     redrawAll();
 
     if (sharedStateOwner || workspaceBoundCanvas) {
-        if (sharedStateOwner && !g_canvasMemoryStarted && isCanvasDesktop()) {
-            g_canvasMemoryStarted     = true;
-            g_canvasMemoryRestoreUntil = Time::steadyNow() + std::chrono::seconds(45);
-        }
         seedCanvasWindows();
         if (SpatialOverview::Experiments::on(ECanvasExperiment::Persist))
             loadSharedCanvasLayout();
@@ -4958,6 +4947,34 @@ bool CScrollOverview::followCanvasWindow(PHLWINDOW window, bool syncFocus, bool 
     return true;
 }
 
+// A canvas client floats from its first layout target, so Hyprland never
+// tiles it first and the canvas places it once.
+void CScrollOverview::prepareCanvasWindowEarly(const PHLWINDOW& window) {
+    if (closing || !isCanvasDesktop() || !window || window->m_monitor != pMonitor || !ScrollOverview::Config::getCanvasAutoFloat())
+        return;
+    if (workspaceBoundCanvas && window->m_workspace != startedOn)
+        return;
+    if (const auto TARGET = window->windowTarget())
+        TARGET->setFloatingInitial(true);
+}
+
+// Sizing precedence for canvas clients: canvas:client_size, then the box
+// Hyprland computed (client request plus size rules), then the client's
+// desired geometry. A size is never invented.
+static std::optional<Vector2D> canvasClientSize(const PHLWINDOW& window, const SP<Layout::ITarget>& target) {
+    if (const auto CONFIGURED = ScrollOverview::Config::getCanvasClientSize())
+        return CONFIGURED;
+
+    const auto usable = [](const Vector2D& size) { return size.x > 1.0 && size.y > 1.0; };
+    if (const auto GOAL = window->geometricBox(Desktop::View::IGeometric::GEOMETRIC_GOAL).size(); usable(GOAL))
+        return GOAL;
+    if (const auto REMEMBERED = target->lastFloatingSize(); usable(REMEMBERED))
+        return REMEMBERED;
+    if (const auto DESIRED = target->desiredGeometry(); DESIRED && usable(DESIRED->size))
+        return DESIRED->size;
+    return std::nullopt;
+}
+
 bool CScrollOverview::manageCanvasWindow(PHLWINDOW window, bool placeNew) {
     if (!isCanvasDesktop())
         return false;
@@ -5008,16 +5025,6 @@ bool CScrollOverview::manageCanvasWindow(PHLWINDOW window, bool placeNew) {
         }
         g_canvasSpatialLayout.erase(saved);
     }
-    if (placeNew && ScrollOverview::Config::getCanvasRememberLayout()) {
-        const auto MEMORYSCOPE = workspaceBoundCanvas ? canvasMemoryKey(startedOn, MONITOR, true) : std::string{};
-        if (const auto HOME = SpatialOverview::Memory::claim(window, Time::steadyNow() < g_canvasMemoryRestoreUntil, MEMORYSCOPE)) {
-            TARGET->rememberFloatingSize(HOME->size());
-            TARGET->setPositionGlobal(*HOME);
-            TARGET->warpPositionSize();
-            TARGET->damageEntire();
-            return true;
-        }
-    }
     if (!placeNew || !ScrollOverview::Config::getCanvasAutoPlace()) {
         TARGET->warpPositionSize();
         return true;
@@ -5026,46 +5033,55 @@ bool CScrollOverview::manageCanvasWindow(PHLWINDOW window, bool placeNew) {
     if (!MONITOR)
         return false;
 
-    auto SIZE = TARGET->lastFloatingSize();
-    if (SIZE.x <= 1.F || SIZE.y <= 1.F || SIZE.x > MONITOR->m_size.x * 0.9F || SIZE.y > MONITOR->m_size.y * 0.9F)
-        SIZE = MONITOR->m_size * 0.42F;
+    const auto CLIENTSIZE = canvasClientSize(window, TARGET);
+    if (!CLIENTSIZE) {
+        TARGET->warpPositionSize();
+        return true;
+    }
 
-    const auto CENTERPX    = CBox{{}, MONITOR->m_size * MONITOR->m_scale}.middle();
-    const auto WORLDCENTER = overviewPointToGlobal(0, CENTERPX);
-    const float GAP        = sc<float>(ScrollOverview::Config::getCanvasPlacementGap());
-    const float STEPX      = SIZE.x + GAP;
-    const float STEPY      = SIZE.y + GAP;
-    CBox       PLACEMENT{WORLDCENTER - SIZE / 2.F, SIZE};
+    const auto  SIZE        = *CLIENTSIZE;
+    const auto  CENTERPX    = CBox{{}, MONITOR->m_size * MONITOR->m_scale}.middle();
+    const auto  WORLDCENTER = overviewPointToGlobal(0, CENTERPX);
+    const float GAP         = sc<float>(ScrollOverview::Config::getCanvasPlacementGap());
+    const float GRID        = ScrollOverview::Config::getCanvasSnapEnabled() ? sc<float>(ScrollOverview::Config::getCanvasSnapSize()) : 0.F;
+    // One placement step is a client plus the gap, on the grid lattice.
+    const auto  gridStep    = [GRID](float length) { return GRID > 0.F ? std::max(GRID, std::round(length / GRID) * GRID) : length; };
+    const float STEPX       = gridStep(SIZE.x + GAP);
+    const float STEPY       = gridStep(SIZE.y + GAP);
+
+    std::vector<CBox> existing;
+    for (const auto& existingRef : Desktop::windowState()->windows()) {
+        const auto EXISTING = getOverviewWindowToShow(existingRef);
+        if (!shouldShowOverviewWindow(EXISTING) || !canvasWindowInWorkspace(EXISTING) || EXISTING == window || !EXISTING->layoutTarget() || isScreensaverWindow(EXISTING))
+            continue;
+        existing.push_back(EXISTING->layoutTarget()->position());
+    }
 
     const auto occupied = [&](const CBox& candidate) {
-        for (const auto& existingRef : Desktop::windowState()->windows()) {
-            const auto EXISTING = getOverviewWindowToShow(existingRef);
-            if (!shouldShowOverviewWindow(EXISTING) || !canvasWindowInWorkspace(EXISTING) || EXISTING == window || !EXISTING->layoutTarget() || isScreensaverWindow(EXISTING))
-                continue;
-            auto BOX = EXISTING->layoutTarget()->position();
-            BOX.expand(GAP * 0.5F);
-            if (BOX.overlaps(candidate))
-                return true;
-        }
-        return false;
+        return std::ranges::any_of(existing, [&](const CBox& box) { return box.copy().expand(GAP * 0.5F).overlaps(candidate); });
     };
 
-    bool found = !occupied(PLACEMENT);
-    for (int ring = 1; !found && ring <= 16; ++ring) {
-        std::vector<Vector2D> OFFSETS{
-            {sc<float>(ring), 0.F}, {-sc<float>(ring), 0.F}, {0.F, sc<float>(ring)}, {0.F, -sc<float>(ring)},
-            {sc<float>(ring), sc<float>(ring)}, {-sc<float>(ring), sc<float>(ring)}, {sc<float>(ring), -sc<float>(ring)}, {-sc<float>(ring), -sc<float>(ring)},
-        };
-        for (const auto& offset : OFFSETS) {
-            PLACEMENT = CBox{WORLDCENTER - SIZE / 2.F + Vector2D{offset.x * STEPX, offset.y * STEPY}, SIZE};
-            if (!occupied(PLACEMENT)) {
-                found = true;
-                break;
+    // The first client is centred in view. Later ones join the client nearest
+    // the camera, trying right, left, below and above it in that order, then
+    // the next nearest client.
+    CBox PLACEMENT = snapCanvasWindowBox(CBox{WORLDCENTER - SIZE / 2.F, SIZE}, MONITOR);
+    if (!existing.empty()) {
+        auto anchors = existing;
+        std::ranges::stable_sort(anchors, [&](const CBox& a, const CBox& b) { return a.middle().distanceSq(WORLDCENTER) < b.middle().distanceSq(WORLDCENTER); });
+        const std::array<Vector2D, 4> OFFSETS{Vector2D{STEPX, 0.F}, Vector2D{-STEPX, 0.F}, Vector2D{0.F, STEPY}, Vector2D{0.F, -STEPY}};
+        bool                          found = !occupied(PLACEMENT);
+        for (size_t i = 0; !found && i < anchors.size(); ++i) {
+            for (const auto& offset : OFFSETS) {
+                const auto CANDIDATE = snapCanvasWindowBox(CBox{anchors[i].pos() + offset, SIZE}, MONITOR);
+                if (!occupied(CANDIDATE)) {
+                    PLACEMENT = CANDIDATE;
+                    found     = true;
+                    break;
+                }
             }
         }
     }
 
-    PLACEMENT = snapCanvasWindowBox(PLACEMENT, MONITOR);
     TARGET->rememberFloatingSize(PLACEMENT.size());
     TARGET->setPositionGlobal(PLACEMENT);
     TARGET->warpPositionSize();
@@ -10145,22 +10161,6 @@ static int saveCanvasMemory(void*) {
     if (scrollOverviews().empty() || !ScrollOverview::Config::getCanvasRememberLayout())
         return 0;
 
-    std::vector<SpatialOverview::Memory::SWindowPlacement> placements;
-    std::unordered_set<const void*>                        visited;
-    for (const auto& overview : scrollOverviews()) {
-        const auto* canvas = canvasOf(overview);
-        if (!canvas || !canvas->isCanvasDesktop() || canvas->isClosing())
-            continue;
-        const auto SCOPE = canvas->isWorkspaceBoundCanvas() ? canvasMemoryKey(canvas->workspaceCanvas(), canvas->canvasMonitor(), true) : std::string{};
-        for (const auto& windowRef : Desktop::windowState()->windows()) {
-            const auto WINDOW = getOverviewWindowToShow(windowRef);
-            if (!shouldShowOverviewWindow(WINDOW) || !canvas->canvasWindowInWorkspace(WINDOW) || windowPinned(WINDOW) || !WINDOW->layoutTarget() ||
-                !WINDOW->layoutTarget()->floating() || !visited.emplace(WINDOW.get()).second)
-                continue;
-            placements.push_back({.window = WINDOW, .box = WINDOW->layoutTarget()->position(), .workspace = SCOPE});
-        }
-    }
-
     // Cameras are remembered where they rest at 100%, not mid-flight or zoomed out.
     std::unordered_map<std::string, Vector2D> cameras;
     for (const auto& overview : scrollOverviews()) {
@@ -10171,7 +10171,7 @@ static int saveCanvasMemory(void*) {
         cameras[canvasMemoryKey(canvas->workspaceCanvas(), MONITOR, canvas->isWorkspaceBoundCanvas())] =
             canvas->isCanvasNavigationActive() && canvas->hasNavigationReturn ? canvas->navigationReturnOffset : canvas->restingCameraOffset();
     }
-    SpatialOverview::Memory::save(placements, cameras);
+    SpatialOverview::Memory::save(cameras);
     return 0;
 }
 

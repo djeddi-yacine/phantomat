@@ -178,6 +178,16 @@ std::optional<::Config::CGradientValueData> getShadowColor();
 bool          getNavigatorEnabled();
 bool          getNavigatorAutoOpen();
 bool          getNavigatorLabels();
+bool          getNavigatorLabelDrag();
+enum class EDragBehavior : uint8_t {
+    FOLLOW, // the reticle rides the dragged preview
+    JUMP,   // the reticle stays on the old box until the drop
+    HIDDEN, // no reticle while that window is dragged
+};
+EDragBehavior getNavigatorDragBehavior();
+// canvas:client_size as WxH, or nullopt when the client and size rules decide.
+std::optional<Vector2D> getCanvasClientSize();
+std::string   getOverviewClientScale();
 float         getNavigatorDimUnmatched();
 bool          getNavigatorPointer();
 std::string   getNavigatorAccent();

@@ -233,6 +233,7 @@ class CScrollOverview : public IOverview {
     CBox         canvasDesktopWindowBox(const PHLWINDOW& window) const;
     PHLWINDOW    canvasDesktopWindowAtPoint(const Vector2D& point, CBox* renderedBox = nullptr, Vector2D* surfaceLocal = nullptr) const;
     void         zoomCanvasAt(const Vector2D& point, float requestedZoom, bool animate = false);
+    void         prepareCanvasWindowEarly(const PHLWINDOW& window);
     bool         manageCanvasWindow(PHLWINDOW window, bool placeNew);
     void         ensureCanvasKeyboardFocus(PHLWINDOW window = {});
     bool         workspaceCanvasSpecialActive() const;
@@ -469,6 +470,7 @@ class CScrollOverview : public IOverview {
     CHyprSignalListener             pinchUpdateHook;
     CHyprSignalListener             pinchEndHook;
     CHyprSignalListener             windowOpenHook;
+    CHyprSignalListener             windowOpenEarlyHook;
     CHyprSignalListener             windowCloseHook;
     CHyprSignalListener             windowMoveHook;
     CHyprSignalListener             windowActiveHook;

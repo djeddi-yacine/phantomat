@@ -441,7 +441,7 @@ static void registerConfigValues() {
                                                           SFloatValueOptions{.min = 0.01F, .max = 2.F}));
     HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
                                   makeShared<CFloatValue>("plugin:spatialoverview:canvas:min_zoom", "minimum shared-canvas camera zoom", 0.05F,
-                                                          SFloatValueOptions{.min = 0.05F, .max = 2.F}));
+                                                          SFloatValueOptions{.min = 0.01F, .max = 2.F}));
     HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
                                   makeShared<CFloatValue>("plugin:spatialoverview:canvas:max_zoom", "maximum shared-canvas camera zoom", 2.5F,
                                                           SFloatValueOptions{.min = 0.1F, .max = 8.F}));
@@ -452,6 +452,13 @@ static void registerConfigValues() {
                                   makeShared<CBoolValue>("plugin:spatialoverview:canvas:auto_float", "detach canvas windows from tiling", true));
     HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
                                   makeShared<CBoolValue>("plugin:spatialoverview:canvas:auto_place", "place newly opened windows on the canvas grid", true));
+    HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
+                                  makeShared<CStringValue>("plugin:spatialoverview:canvas:client_size",
+                                                           "size of new canvas clients as WxH; empty lets the client and Hyprland size rules decide", Hyprlang::STRING{""}));
+    HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
+                                  makeShared<CStringValue>("plugin:spatialoverview:canvas:overview_client_scale",
+                                                           "overview preview scale: empty derives it per monitor, \"0.5\" sets all, \"DP-1:0.45,HDMI-A-1:0.6\" sets by name",
+                                                           Hyprlang::STRING{""}));
     HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
                                   makeShared<CIntValue>("plugin:spatialoverview:canvas:placement_gap", "minimum gap used by automatic canvas placement", 40,
                                                         SIntValueOptions{.min = 0, .max = 512}));
@@ -599,6 +606,11 @@ static void registerConfigValues() {
                                   makeShared<CBoolValue>("plugin:spatialoverview:navigator:auto_open", "open the type-to-search palette automatically when entering canvas navigation", true));
     HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
                                   makeShared<CBoolValue>("plugin:spatialoverview:navigator:labels", "draw window titles on the zoomed-out canvas", true));
+    HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
+                                  makeShared<CBoolValue>("plugin:spatialoverview:navigator:label_drag", "keep a dragged window's title on its card", true));
+    HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
+                                  makeShared<CStringValue>("plugin:spatialoverview:navigator:drag_behavior",
+                                                           "selection reticle while dragging: follow, jump or hidden", Hyprlang::STRING{"follow"}));
     HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
                                   makeShared<CFloatValue>("plugin:spatialoverview:navigator:dim_unmatched", "dimming of windows that do not match the search", 0.7F,
                                                           SFloatValueOptions{.min = 0.F, .max = 1.F}));
@@ -768,7 +780,7 @@ float getCanvasInitialZoom() {
 }
 
 float getCanvasMinZoom() {
-    return std::clamp(getValue<float>("plugin:spatialoverview:canvas:min_zoom"), 0.05F, 2.F);
+    return std::clamp(getValue<float>("plugin:spatialoverview:canvas:min_zoom"), 0.01F, 2.F);
 }
 
 float getCanvasMaxZoom() {
@@ -1049,6 +1061,28 @@ bool getNavigatorEnabled() {
 
 bool getNavigatorAutoOpen() {
     return getValue<bool>("plugin:spatialoverview:navigator:auto_open");
+}
+
+bool getNavigatorLabelDrag() {
+    return getValue<bool>("plugin:spatialoverview:navigator:label_drag");
+}
+
+EDragBehavior getNavigatorDragBehavior() {
+    const auto VALUE = getValue<std::string>("plugin:spatialoverview:navigator:drag_behavior");
+    return VALUE == "jump" ? EDragBehavior::JUMP : VALUE == "hidden" ? EDragBehavior::HIDDEN : EDragBehavior::FOLLOW;
+}
+
+std::optional<Vector2D> getCanvasClientSize() {
+    const auto VALUE = getValue<std::string>("plugin:spatialoverview:canvas:client_size");
+    int        width = 0, height = 0;
+    char       separator = 0;
+    if (std::istringstream stream{VALUE}; !(stream >> width >> separator >> height) || (separator != 'x' && separator != 'X') || width < 1 || height < 1)
+        return std::nullopt;
+    return Vector2D{sc<double>(width), sc<double>(height)};
+}
+
+std::string getOverviewClientScale() {
+    return getValue<std::string>("plugin:spatialoverview:canvas:overview_client_scale");
 }
 
 bool getNavigatorLabels() {
