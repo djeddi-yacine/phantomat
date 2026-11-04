@@ -178,6 +178,7 @@ bool          getNavigatorEnabled();
 bool          getNavigatorAutoOpen();
 bool          getNavigatorLabels();
 bool          getNavigatorLabelDrag();
+int           getOverviewBorderSize();
 bool          getNavigatorHideOutlineInMotion();
 enum class EDragBehavior : uint8_t {
     FOLLOW, // the reticle rides the dragged preview

@@ -458,6 +458,10 @@ static void registerConfigValues() {
                                                            "overview preview scale: empty derives it per monitor, \"0.5\" sets all, \"DP-1:0.45,HDMI-A-1:0.6\" sets by name",
                                                            Hyprlang::STRING{""}));
     HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
+                                  makeShared<CIntValue>("plugin:spatialoverview:canvas:overview_border_size",
+                                                        "border thickness of clients in the overview, in pixels; 0 uses the window's own border size", 0,
+                                                        SIntValueOptions{.min = 0, .max = 16}));
+    HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
                                   makeShared<CIntValue>("plugin:spatialoverview:canvas:placement_gap", "minimum gap used by automatic canvas placement", 40,
                                                         SIntValueOptions{.min = 0, .max = 512}));
     HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
@@ -1066,6 +1070,10 @@ bool getNavigatorAutoOpen() {
 
 bool getNavigatorHideOutlineInMotion() {
     return getValue<bool>("plugin:spatialoverview:navigator:hide_outline_in_motion");
+}
+
+int getOverviewBorderSize() {
+    return std::clamp(getValue<int>("plugin:spatialoverview:canvas:overview_border_size"), 0, 16);
 }
 
 bool getNavigatorLabelDrag() {

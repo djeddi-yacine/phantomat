@@ -334,7 +334,10 @@ static SOverviewWindowMetrics getOverviewWindowMetrics(PHLMONITOR monitor, const
         return metrics;
 
     metrics.pxScale                 = monitor->m_scale * renderScale;
-    metrics.borderSize              = window->presentation().borderSize();
+    // One thickness for every draw path of a client's border (resting or
+    // wobbling): the configured overview width, else the window's own.
+    const int CONFIGUREDBORDER = ScrollOverview::Config::getOverviewBorderSize();
+    metrics.borderSize         = CONFIGUREDBORDER > 0 ? sc<float>(CONFIGUREDBORDER) : sc<float>(window->presentation().borderSize());
     metrics.borderPx                = sc<int>(std::round(metrics.borderSize * monitor->m_scale));
     metrics.borderPxScaled          = metrics.borderSize * metrics.pxScale;
     metrics.roundingBase            = window->presentation().rounding();
