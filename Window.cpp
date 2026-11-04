@@ -9,12 +9,12 @@
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/config/ConfigValue.hpp>
 #include <hyprland/src/managers/SeatManager.hpp>
-#include <hyprland/src/managers/KeybindManager.hpp>
+#include <hyprland/src/keybinds/Manager.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/view/Group.hpp>
 #include <hyprland/src/desktop/view/Popup.hpp>
 #include <hyprland/src/desktop/view/WLSurface.hpp>
-#include <hyprland/src/managers/EventManager.hpp>
+#include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/plugins/PluginSystem.hpp>
 #include <hyprland/src/render/pass/Pass.hpp>
 #include <hyprland/src/render/pass/RectPassElement.hpp>
@@ -90,6 +90,18 @@ struct COverviewAnimatedVariableAccess : Hyprutils::Animation::CBaseAnimatedVari
         rc<COverviewAnimatedVariableAccess*>(variable)->m_bIsBeingAnimated = animated;
     }
 };
+
+// CRenderPass keeps its queued elements private. The overview captures one
+// window's pass in its own CRenderPass and edits those surface elements before
+// they join the frame pass; explicit instantiation may name the private member.
+auto& capturedPassElements(Render::CRenderPass& pass);
+template <auto MEMBER>
+struct SCapturedPassAccess {
+    friend auto& capturedPassElements(Render::CRenderPass& pass) {
+        return pass.*MEMBER;
+    }
+};
+template struct SCapturedPassAccess<&Render::CRenderPass::m_passElements>;
 
 static PHLWINDOW getOverviewWindowToShow(const PHLWINDOW& window) {
     if (!window)
@@ -227,7 +239,7 @@ struct SOverviewPseudoFocusState {
 };
 
 
-static void roundStandaloneWindowPassElements(const PHLWINDOW& window, PHLMONITOR monitor, float renderScale, size_t firstElement) {
+static void roundStandaloneWindowPassElements(const PHLWINDOW& window, PHLMONITOR monitor, float renderScale, Render::CRenderPass& windowPass) {
     if (!window || !monitor)
         return;
 
@@ -240,9 +252,7 @@ static void roundStandaloneWindowPassElements(const PHLWINDOW& window, PHLMONITO
     if (rounding <= 0)
         return;
 
-    auto& passElements = g_pHyprRenderer->m_renderPass.m_passElements;
-    for (size_t i = firstElement; i < passElements.size(); ++i) {
-        const auto& passElement = passElements[i];
+    for (const auto& passElement : capturedPassElements(windowPass)) {
         if (!passElement.element)
             continue;
 
@@ -325,13 +335,11 @@ static bool shouldOverviewShadowIncludeHyprbar(const PHLWINDOW& window, bool bor
     return ScrollOverview::Config::getValue<bool>("plugin:hyprbars:bar_part_of_window");
 }
 
-static void blockOverviewWindowBlurOptimization(const PHLWINDOW& window, size_t firstElement) {
+static void blockOverviewWindowBlurOptimization(const PHLWINDOW& window, Render::CRenderPass& windowPass) {
     if (!window)
         return;
 
-    auto& passElements = g_pHyprRenderer->m_renderPass.m_passElements;
-    for (size_t i = firstElement; i < passElements.size(); ++i) {
-        const auto& passElement = passElements[i];
+    for (const auto& passElement : capturedPassElements(windowPass)) {
         if (!passElement.element)
             continue;
 
@@ -344,7 +352,7 @@ static void blockOverviewWindowBlurOptimization(const PHLWINDOW& window, size_t 
 }
 
 static void scaleOverviewChildSurfaceGeometry(const PHLWINDOW& window, const Vector2D& targetPosition, const Vector2D& targetSize,
-                                              size_t firstElement) {
+                                              Render::CRenderPass& windowPass) {
     if (!window)
         return;
 
@@ -353,10 +361,8 @@ static void scaleOverviewChildSurfaceGeometry(const PHLWINDOW& window, const Vec
         return;
 
     const Vector2D SURFACESCALE = targetSize / REPORTEDSIZE;
-    auto&          passElements = g_pHyprRenderer->m_renderPass.m_passElements;
 
-    for (size_t i = firstElement; i < passElements.size(); ++i) {
-        const auto& passElement = passElements[i];
+    for (const auto& passElement : capturedPassElements(windowPass)) {
         if (!passElement.element)
             continue;
 
@@ -392,50 +398,35 @@ static void scaleOverviewChildSurfaceGeometry(const PHLWINDOW& window, const Vec
     }
 }
 
-static void raiseWindowPopups(const PHLWINDOW& window, size_t firstElement, const std::optional<Render::SRenderModifData>& popupTransform = std::nullopt) {
-    if (!window)
-        return;
-
-    auto& passElements = g_pHyprRenderer->m_renderPass.m_passElements;
-    if (firstElement >= passElements.size())
-        return;
-
-    if (popupTransform) {
-        using TPassElement = std::remove_reference_t<decltype(passElements)>::value_type;
-        std::vector<TPassElement> popups;
-
-        for (auto it = passElements.begin() + firstElement; it != passElements.end();) {
-            const auto* surfacePassElement = it->element ? dc<const CSurfacePassElement*>(it->element.get()) : nullptr;
-            if (!surfacePassElement || surfacePassElement->m_data.pWindow != window || !surfacePassElement->m_data.popup) {
-                ++it;
-                continue;
-            }
-
-            popups.emplace_back(std::move(*it));
-            it = passElements.erase(it);
-        }
-
-        if (popups.empty())
-            return;
-
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = *popupTransform}));
-        for (auto& popup : popups)
-            passElements.emplace_back(std::move(popup));
-        g_pHyprRenderer->m_renderPass.add(
-            makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = Render::SRenderModifData{}}));
-        return;
-    }
-
-    // renderWindow queues popups after the main surface, but overview adds its
-    // own decorations and border afterwards. Keep every non-popup element in
-    // its original order and move only this window's popup surfaces on top.
-    std::stable_partition(passElements.begin() + firstElement, passElements.end(), [&window](const auto& passElement) {
+// Moves the captured window pass into the frame pass. renderWindow queues
+// popups after the main surface, but the overview adds its own decorations and
+// border afterwards, so popups are held back and queued by commitWindowPopups.
+static std::vector<UP<IPassElement>> commitWindowPass(Render::CRenderContext& ctx, const PHLWINDOW& window, Render::CRenderPass& windowPass) {
+    std::vector<UP<IPassElement>> popups;
+    for (auto& passElement : capturedPassElements(windowPass)) {
         if (!passElement.element)
-            return true;
+            continue;
 
         const auto* surfacePassElement = dc<const CSurfacePassElement*>(passElement.element.get());
-        return !surfacePassElement || surfacePassElement->m_data.pWindow != window || !surfacePassElement->m_data.popup;
-    });
+        if (surfacePassElement && surfacePassElement->m_data.pWindow == window && surfacePassElement->m_data.popup)
+            popups.emplace_back(std::move(passElement.element));
+        else
+            Render::IHyprRenderer::addPassElement(ctx, std::move(passElement.element));
+    }
+    windowPass.clear();
+    return popups;
+}
+
+static void commitWindowPopups(Render::CRenderContext& ctx, std::vector<UP<IPassElement>>& popups, const std::optional<Render::SRenderModifData>& popupTransform = std::nullopt) {
+    if (popups.empty())
+        return;
+
+    if (popupTransform)
+        Render::IHyprRenderer::addPassElement(ctx, makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = *popupTransform}));
+    for (auto& popup : popups)
+        Render::IHyprRenderer::addPassElement(ctx, std::move(popup));
+    if (popupTransform)
+        Render::IHyprRenderer::addPassElement(ctx, makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = Render::SRenderModifData{}}));
 }
 
 static SOverviewWindowMetrics getOverviewWindowMetrics(PHLMONITOR monitor, const PHLWINDOW& window, float renderScale) {
@@ -636,7 +627,7 @@ static void renderOverviewWindowShadow(PHLMONITOR monitor, const PHLWINDOW& wind
     if (std::ranges::none_of(shadowColor.m_colors, [](const CHyprColor& color) { return color.a > 0.F; }))
         return;
 
-    g_pHyprRenderer->m_renderPass.add(makeUnique<COverviewShadowPassElement>(COverviewShadowPassElement::SData{
+    Render::IHyprRenderer::addPassElement(ctx, makeUnique<COverviewShadowPassElement>(COverviewShadowPassElement::SData{
         .monitor       = monitor,
         .fullBox       = shadowBox,
         .cutoutBox     = cutoutBox.round(),
@@ -678,7 +669,7 @@ static void renderOverviewWindowBorder(PHLMONITOR monitor, const PHLWINDOW& wind
         data.lerp     = window->m_borderFadeAnimationProgress->value();
     } else
         data.grad1 = grad;
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(data));
+    Render::IHyprRenderer::addPassElement(ctx, makeUnique<CBorderPassElement>(data));
 }
 
 static void renderOverviewGroupTabIndicators(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& windowBox, const SOverviewWindowMetrics& metrics, float alpha) {
@@ -750,7 +741,7 @@ static void renderOverviewGroupTabIndicators(PHLMONITOR monitor, const PHLWINDOW
         data.color         = color;
         data.round         = rounding;
         data.roundingPower = PROUNDINGPOWER;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(data));
+        Render::IHyprRenderer::addPassElement(ctx, makeUnique<CRectPassElement>(data));
     }
 }
 
@@ -853,7 +844,7 @@ static void renderOverviewGroupTabTitles(PHLMONITOR monitor, const PHLWINDOW& wi
         data.tex = titleTex;
         data.box = textBox;
         data.a   = 1.F;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(data));
+        Render::IHyprRenderer::addPassElement(ctx, makeUnique<CTexPassElement>(data));
     }
 }
 
@@ -894,9 +885,9 @@ static void renderOverviewGroupTabs(PHLMONITOR monitor, const PHLWINDOW& window,
     modif.modifs.emplace_back(Render::SRenderModifData::RMOD_TYPE_TRANSLATE, workspaceBox.pos());
 
     GROUPBAR->updateWindow(window);
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = modif}));
+    Render::IHyprRenderer::addPassElement(ctx, makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = modif}));
     GROUPBAR->draw(monitor, metrics.targetOpacity);
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = Render::SRenderModifData{}}));
+    Render::IHyprRenderer::addPassElement(ctx, makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = Render::SRenderModifData{}}));
     renderOverviewGroupTabIndicators(monitor, window, windowBox, metrics, metrics.targetOpacity);
 }
 
@@ -924,7 +915,7 @@ static SOverviewCustomDecorationRenderState renderOverviewCustomDecorations(PHLM
         }
 
         if (!drewAny) {
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = modif}));
+            Render::IHyprRenderer::addPassElement(ctx, makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = modif}));
             drewAny = true;
         }
 
@@ -934,7 +925,7 @@ static SOverviewCustomDecorationRenderState renderOverviewCustomDecorations(PHLM
     }
 
     if (drewAny)
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = Render::SRenderModifData{}}));
+        Render::IHyprRenderer::addPassElement(ctx, makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = Render::SRenderModifData{}}));
 
     return state;
 }
@@ -986,7 +977,7 @@ void forceDecoRecalc(const PHLWINDOW& window) {
     WINDOW->updateWindowDecos();
 }
 
-void renderOverviewWindow(const SRenderParams& params) {
+void renderOverviewWindow(Render::CRenderContext& ctx, const SRenderParams& params) {
     if (!params.window)
         return;
 
@@ -1000,7 +991,7 @@ void renderOverviewWindow(const SRenderParams& params) {
     const auto underDecos =
         renderOverviewCustomDecorations(params.monitor, params.window, params.workspaceBox ? *params.workspaceBox : CBox{}, params.windowBox, metrics, DECORATION_LAYER_UNDER);
     if (underDecos.queuedAny) {
-        OverviewRender::flushPass(params.monitor);
+        OverviewRender::flushPass(ctx, params.monitor);
         for (auto it = underDecos.restoreFns.rbegin(); it != underDecos.restoreFns.rend(); ++it)
             (*it)();
     }
@@ -1062,40 +1053,45 @@ void renderOverviewWindow(const SRenderParams& params) {
         }
     });
 
-    const size_t firstWindowPassElement = g_pHyprRenderer->m_renderPass.m_passElements.size();
-    const bool   usePrecomputedBlur     = shouldUsePrecomputedBlur(params.window, params.monitor, params.workspaceBox, &params.windowBox, params.dragged);
+    const bool usePrecomputedBlur = shouldUsePrecomputedBlur(params.window, params.monitor, params.workspaceBox, &params.windowBox, params.dragged);
     if (cameraTransform)
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = *cameraTransform}));
-    g_pHyprRenderer->renderWindow(params.window, params.monitor, params.now, false, Render::RENDER_PASS_ALL, false, false);
-    if (cameraTransform)
-        g_pHyprRenderer->m_renderPass.add(
-            makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = Render::SRenderModifData{}}));
-    else {
+        Render::IHyprRenderer::addPassElement(ctx, makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = *cameraTransform}));
+
+    Render::CRenderPass windowPass;
+    {
+        auto redirect = Render::IHyprRenderer::redirectPass(ctx, &windowPass);
+        g_pHyprRenderer->renderWindow(ctx, params.window, params.monitor, params.window->presentation().renderPresentation(), params.now, false, Render::RENDER_PASS_ALL,
+                                      false, false);
+    }
+    if (!cameraTransform) {
         const Vector2D targetWindowPosition = params.monitor->m_position + params.windowBox.pos() / params.monitor->m_scale;
-        scaleOverviewChildSurfaceGeometry(params.window, targetWindowPosition, params.window->sizeAnimation()->value(), firstWindowPassElement);
+        scaleOverviewChildSurfaceGeometry(params.window, targetWindowPosition, params.window->sizeAnimation()->value(), windowPass);
     }
     if (!usePrecomputedBlur)
-        blockOverviewWindowBlurOptimization(params.window, firstWindowPassElement);
-    roundStandaloneWindowPassElements(params.window, params.monitor, params.renderScale, firstWindowPassElement);
+        blockOverviewWindowBlurOptimization(params.window, windowPass);
+    roundStandaloneWindowPassElements(params.window, params.monitor, params.renderScale, windowPass);
+    auto popups = commitWindowPass(ctx, params.window, windowPass);
 
-    renderOverviewCustomDecorations(params.monitor, params.window, params.workspaceBox ? *params.workspaceBox : CBox{}, params.windowBox, metrics, DECORATION_LAYER_OVER);
-    renderOverviewCustomDecorations(params.monitor, params.window, params.workspaceBox ? *params.workspaceBox : CBox{}, params.windowBox, metrics, DECORATION_LAYER_OVERLAY);
-
-    if (!fullscreen)
-        renderOverviewGroupTabIndicators(params.monitor, params.window, params.windowBox, metrics, metrics.targetOpacity);
-    if (!fullscreen)
-        renderOverviewGroupTabTitles(params.monitor, params.window, params.windowBox, metrics, metrics.targetOpacity);
-
-    if (!fullscreen)
-        renderOverviewWindowBorder(params.monitor, params.window, params.windowBox, metrics, params.selected);
-
-    raiseWindowPopups(params.window, firstWindowPassElement, cameraTransform);
-    const bool previousNoSimplify = g_pHyprRenderer->m_renderData.noSimplify;
     if (cameraTransform)
-        g_pHyprRenderer->m_renderData.noSimplify = true;
+        Render::IHyprRenderer::addPassElement(ctx, makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{.renderModif = Render::SRenderModifData{}}));
+
+    renderOverviewCustomDecorations(ctx, params.monitor, params.window, params.workspaceBox ? *params.workspaceBox : CBox{}, params.windowBox, metrics, DECORATION_LAYER_OVER);
+    renderOverviewCustomDecorations(ctx, params.monitor, params.window, params.workspaceBox ? *params.workspaceBox : CBox{}, params.windowBox, metrics,
+                                    DECORATION_LAYER_OVERLAY);
+
+    if (!fullscreen) {
+        renderOverviewGroupTabIndicators(ctx, params.monitor, params.window, params.windowBox, metrics, metrics.targetOpacity);
+        renderOverviewGroupTabTitles(ctx, params.monitor, params.window, params.windowBox, metrics, metrics.targetOpacity);
+        renderOverviewWindowBorder(ctx, params.monitor, params.window, params.windowBox, metrics, params.selected);
+    }
+
+    commitWindowPopups(ctx, popups, cameraTransform);
+    const bool previousNoSimplify = ctx.m_data.noSimplify;
+    if (cameraTransform)
+        ctx.m_data.noSimplify = true;
     auto restoreNoSimplify = Hyprutils::Utils::CScopeGuard(
-        [previousNoSimplify] { g_pHyprRenderer->m_renderData.noSimplify = previousNoSimplify; });
-    OverviewRender::flushPass(params.monitor);
+        [previousNoSimplify] { ctx.m_data.noSimplify = previousNoSimplify; });
+    OverviewRender::flushPass(ctx, params.monitor);
 }
 
 } // namespace OverviewWindow

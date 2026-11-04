@@ -13,7 +13,7 @@
 #include <unordered_map>
 
 #include <hyprland/src/config/shared/complex/ComplexDataTypes.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/render/Texture.hpp>
 

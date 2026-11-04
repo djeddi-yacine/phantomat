@@ -8,13 +8,16 @@
 #include <vector>
 
 class CWLSurfaceResource;
+namespace Render {
+class CRenderContext;
+}
 
 class IOverview {
   public:
     IOverview()          = default;
     virtual ~IOverview() = default;
 
-    virtual void  render()           = 0;
+    virtual void  render(Render::CRenderContext& ctx)     = 0;
     virtual void  damage()           = 0;
     virtual void  requestInputFrame() = 0;
     virtual void  onDamageReported() = 0;
@@ -37,7 +40,7 @@ class IOverview {
     virtual bool  moveSelection(const std::string& direction) = 0;
     virtual bool  windowDispatcherAction(const std::string& action) = 0;
 
-    virtual void  fullRender() = 0;
+    virtual void  fullRender(Render::CRenderContext& ctx) = 0;
     virtual void  syncAnimationConfig() {}
 
     bool          blockDamageReporting   = false;

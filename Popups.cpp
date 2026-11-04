@@ -29,7 +29,7 @@
 #define private public
 #define protected public
 #include <hyprland/src/desktop/view/Popup.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
 #include <hyprland/src/protocols/XDGShell.hpp>
 #undef protected
 #undef private

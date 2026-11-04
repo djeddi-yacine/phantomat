@@ -39,8 +39,8 @@ class CScrollOverview : public IOverview {
     CScrollOverview(PHLWORKSPACE startedOn_, bool swipe = false, PHLMONITOR monitor = {}, bool workspaceBoundCanvas = false);
     ~CScrollOverview() override;
 
-    void         render() override;
-    void         renderWorkspaceTransition();
+    void         render(Render::CRenderContext& ctx) override;
+    void         renderWorkspaceTransition(Render::CRenderContext& ctx);
     bool         ownsWorkspaceTransitionWindow(const PHLWINDOW& window) const;
     void         damage() override;
     void         requestInputFrame() override;
@@ -110,7 +110,7 @@ class CScrollOverview : public IOverview {
     Vector2D     navigationReturnOffset{};
     bool         hasNavigationReturn = false;
 
-    void         fullRender() override;
+    void         fullRender(Render::CRenderContext& ctx) override;
     void         syncAnimationConfig() override;
 
     // Popups: Hyprland places and fades them in the window's real
@@ -150,8 +150,8 @@ class CScrollOverview : public IOverview {
     void   seedRememberedSelections();
     void   redrawAll(bool forcelowres = false);
     void   onWorkspaceChange();
-    void   renderGlobalWallpaper(PHLMONITOR monitor, const Time::steady_tp& now);
-    void   renderWallpaperLayers(PHLMONITOR monitor, const CBox& workspaceBox, float renderScale, const Time::steady_tp& now, float alpha = 1.F);
+    void   renderGlobalWallpaper(Render::CRenderContext& ctx, PHLMONITOR monitor, const Time::steady_tp& now);
+    void   renderWallpaperLayers(Render::CRenderContext& ctx, PHLMONITOR monitor, const CBox& workspaceBox, float renderScale, const Time::steady_tp& now, float alpha = 1.F);
     // Parallax: the wallpaper as a far layer, shifted by a fraction of the
     // camera's movement and scaled with the zoom. Inactive leaves it untouched.
     struct SBackdropTransform {
@@ -161,17 +161,17 @@ class CScrollOverview : public IOverview {
     };
     SBackdropTransform canvasBackdropTransform(PHLMONITOR monitor, float renderScale) const;
     bool   updateBackdropSharpCache(PHLMONITOR monitor, const Time::steady_tp& now);
-    void   renderBackdropTiled(PHLMONITOR monitor, const SP<Render::ITexture>& texture, float alpha, const SBackdropTransform& transform);
+    void   renderBackdropTiled(Render::CRenderContext& ctx, PHLMONITOR monitor, const SP<Render::ITexture>& texture, float alpha, const SBackdropTransform& transform);
     void   updateBackdropBlurCache(PHLMONITOR monitor, int wallpaperMode, const Time::steady_tp& now);
-    void   renderBackdropBlurCache(PHLMONITOR monitor, float alpha, const SBackdropTransform& transform);
-    void   renderWorkspaceBackground(PHLMONITOR monitor, size_t workspaceIdx, size_t activeIdx, float workspacePitch, float renderScale, int wallpaperMode, const Time::steady_tp& now);
-    void   renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceIdx, size_t activeIdx, float workspacePitch, float renderScale, int wallpaperMode, const Time::steady_tp& now);
-    void   renderWorkspaceOutline(PHLMONITOR monitor, size_t workspaceIdx, size_t activeIdx, float workspacePitch, float renderScale);
-    void   renderCanvasBackgroundDim(PHLMONITOR monitor);
-    void   renderCanvasGrid(PHLMONITOR monitor, size_t activeIdx, float workspacePitch, float renderScale);
-    void   renderCanvasMinimap(PHLMONITOR monitor);
+    void   renderBackdropBlurCache(Render::CRenderContext& ctx, PHLMONITOR monitor, float alpha, const SBackdropTransform& transform);
+    void   renderWorkspaceBackground(Render::CRenderContext& ctx, PHLMONITOR monitor, size_t workspaceIdx, size_t activeIdx, float workspacePitch, float renderScale, int wallpaperMode, const Time::steady_tp& now);
+    void   renderWorkspaceLive(Render::CRenderContext& ctx, PHLMONITOR monitor, size_t workspaceIdx, size_t activeIdx, float workspacePitch, float renderScale, int wallpaperMode, const Time::steady_tp& now);
+    void   renderWorkspaceOutline(Render::CRenderContext& ctx, PHLMONITOR monitor, size_t workspaceIdx, size_t activeIdx, float workspacePitch, float renderScale);
+    void   renderCanvasBackgroundDim(Render::CRenderContext& ctx, PHLMONITOR monitor);
+    void   renderCanvasGrid(Render::CRenderContext& ctx, PHLMONITOR monitor, size_t activeIdx, float workspacePitch, float renderScale);
+    void   renderCanvasMinimap(Render::CRenderContext& ctx, PHLMONITOR monitor);
     std::optional<CBox> canvasMinimapWorldBounds(PHLMONITOR monitor) const;
-    void   renderExperimentChrome(PHLMONITOR monitor);
+    void   renderExperimentChrome(Render::CRenderContext& ctx, PHLMONITOR monitor);
     bool   handleExperimentKey(uint32_t keysym, uint32_t mods);
     bool   handleExperimentClick(uint32_t button, uint32_t state, const Vector2D& rawLocal);
     void   updateExperimentDrag();
@@ -189,18 +189,18 @@ class CScrollOverview : public IOverview {
     void   setCanvasCursor(const std::string& shape);
     void   leaveNavigatorPointer();
     Vector2D canvasCameraOffsetFor(const PHLWINDOW& window, float zoom, bool navigating) const;
-    void   renderNavigatorWindowOverlay(PHLMONITOR monitor, PHLWINDOW window, const CBox& windowBox);
-    void   renderNavigatorReticle(PHLMONITOR monitor, const Time::steady_tp& now);
-    void   renderNavigatorHud(PHLMONITOR monitor);
+    void   renderNavigatorWindowOverlay(Render::CRenderContext& ctx, PHLMONITOR monitor, PHLWINDOW window, const CBox& windowBox);
+    void   renderNavigatorReticle(Render::CRenderContext& ctx, PHLMONITOR monitor, const Time::steady_tp& now);
+    void   renderNavigatorHud(Render::CRenderContext& ctx, PHLMONITOR monitor);
     CBox   canvasArrangeButtonBox() const;
-    void   renderCanvasViewport(PHLMONITOR monitor, float renderScale);
-    void   renderCanvasDesktopScene(PHLMONITOR monitor, float renderScale, const Time::steady_tp& now, bool includeScreenFixedWindows);
-    void   renderChromeLayers(PHLMONITOR monitor, const Time::steady_tp& now);
+    void   renderCanvasViewport(Render::CRenderContext& ctx, PHLMONITOR monitor, float renderScale);
+    void   renderCanvasDesktopScene(Render::CRenderContext& ctx, PHLMONITOR monitor, float renderScale, const Time::steady_tp& now, bool includeScreenFixedWindows);
+    void   renderChromeLayers(Render::CRenderContext& ctx, PHLMONITOR monitor, const Time::steady_tp& now);
     bool   hasVisiblePrecomputedBlurWindow(PHLMONITOR monitor, size_t activeIdx, float workspacePitch, float renderScale) const;
-    void   renderWindowLive(PHLMONITOR monitor, PHLWINDOW window, const CBox& windowBox, float renderScale, const Time::steady_tp& now, const CBox* workspaceBox = nullptr,
+    void   renderWindowLive(Render::CRenderContext& ctx, PHLMONITOR monitor, PHLWINDOW window, const CBox& windowBox, float renderScale, const Time::steady_tp& now, const CBox* workspaceBox = nullptr,
                              bool dragged = false);
-    void   renderDraggedWindow(PHLMONITOR monitor, size_t activeIdx, float workspacePitch, float renderScale, const Time::steady_tp& now);
-    void   renderPinnedFloatingWindows(PHLMONITOR monitor, float overviewScale, const Time::steady_tp& now);
+    void   renderDraggedWindow(Render::CRenderContext& ctx, PHLMONITOR monitor, size_t activeIdx, float workspacePitch, float renderScale, const Time::steady_tp& now);
+    void   renderPinnedFloatingWindows(Render::CRenderContext& ctx, PHLMONITOR monitor, float overviewScale, const Time::steady_tp& now);
     void   moveViewportWorkspace(bool up);
     void   moveViewportWorkspaceTo(size_t targetIndex);
     void   trackpadSwipeLayout(const PHLWORKSPACE target, const double delta);

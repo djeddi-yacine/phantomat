@@ -25,5 +25,5 @@ class CDropIndicator {
         ScrollOverview::Config::ELayout layout = ScrollOverview::Config::ELayout::VERTICAL;
     };
 
-    static void renderDropIndicator(const SRenderParams& params);
+    static void renderDropIndicator(Render::CRenderContext& ctx, const SRenderParams& params);
 };

@@ -12,7 +12,7 @@
 #include <sstream>
 
 #include <hyprland/src/desktop/state/WindowState.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
 
 #include "Navigator.hpp"
 

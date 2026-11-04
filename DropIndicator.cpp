@@ -1,3 +1,4 @@
+#include "OverviewRender.hpp"
 #include "DropIndicator.hpp"
 
 #include <algorithm>
@@ -5,7 +6,7 @@
 #include <sstream>
 
 #define private public
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
 #include <hyprland/src/layout/algorithm/Algorithm.hpp>
 #include <hyprland/src/layout/algorithm/tiled/scrolling/ScrollingAlgorithm.hpp>
 #include <hyprland/src/render/Renderer.hpp>
@@ -118,7 +119,7 @@ static float indicatorRoundingPower(const CDropIndicator::SRenderParams& params)
 
 }
 
-void CDropIndicator::renderDropIndicator(const SRenderParams& params) {
+void CDropIndicator::renderDropIndicator(Render::CRenderContext& ctx, const SRenderParams& params) {
     if (!params.monitor || !params.workspace)
         return;
 
@@ -138,5 +139,5 @@ void CDropIndicator::renderDropIndicator(const SRenderParams& params) {
     data.round         = indicatorRounding(params);
     data.roundingPower = indicatorRoundingPower(params);
 
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(data));
+    Render::IHyprRenderer::addPassElement(ctx, makeUnique<CRectPassElement>(data));
 }

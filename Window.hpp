@@ -3,6 +3,10 @@
 #include "globals.hpp"
 #include <hyprland/src/helpers/time/Time.hpp>
 
+namespace Render {
+class CRenderContext;
+}
+
 namespace OverviewWindow {
 
 bool shouldBlurBackground(const PHLWINDOW& window);
@@ -23,6 +27,6 @@ struct SRenderParams {
     PHLWINDOW             pseudoFocusWindow;
 };
 
-void renderOverviewWindow(const SRenderParams& params);
+void renderOverviewWindow(Render::CRenderContext& ctx, const SRenderParams& params);
 
 }

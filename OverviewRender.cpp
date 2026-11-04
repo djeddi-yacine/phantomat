@@ -9,26 +9,26 @@ namespace OverviewRender {
 
 const CBox* canvasViewportClip = nullptr;
 
-void flushPass(PHLMONITOR monitor) {
-    if (!monitor || g_pHyprRenderer->m_renderPass.empty())
+void flushPass(Render::CRenderContext& ctx, PHLMONITOR monitor) {
+    if (!monitor || Render::IHyprRenderer::currentPass(ctx).empty())
         return;
 
     auto damage = CRegion{CBox{{}, monitor->m_transformedSize}};
     if (canvasViewportClip)
         damage.intersect(*canvasViewportClip);
-    const auto previousDamage = g_pHyprRenderer->m_renderData.damage.copy();
-    const auto previousFinalDamage = g_pHyprRenderer->m_renderData.finalDamage.copy();
-    const auto renderedDamage = g_pHyprRenderer->m_renderPass.render(damage);
-    g_pHyprRenderer->m_renderPass.clear();
+    const auto previousDamage = ctx.m_data.damage.copy();
+    const auto previousFinalDamage = ctx.m_data.finalDamage.copy();
+    const auto renderedDamage = Render::IHyprRenderer::currentPass(ctx).render(ctx, damage);
+    Render::IHyprRenderer::currentPass(ctx).clear();
     if (canvasViewportClip) {
         // Clipping this plane must not shrink native damage already rendered
         // outside it, especially when the incoming workspace is empty.
-        g_pHyprRenderer->m_renderData.damage = previousDamage;
-        g_pHyprRenderer->m_renderData.finalDamage = previousFinalDamage.copy().add(renderedDamage);
+        ctx.m_data.damage = previousDamage;
+        ctx.m_data.finalDamage = previousFinalDamage.copy().add(renderedDamage);
     }
 }
 
-void queueBlur(const CBox& box, int rounding, float roundingPower, float alpha, bool usePrecomputedBlur) {
+void queueBlur(Render::CRenderContext& ctx, const CBox& box, int rounding, float roundingPower, float alpha, bool usePrecomputedBlur) {
     if (alpha <= 0.F)
         return;
 
@@ -43,15 +43,15 @@ void queueBlur(const CBox& box, int rounding, float roundingPower, float alpha, 
     data.blur          = true;
     data.blurA         = alpha;
     data.xray          = usePrecomputedBlur;
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(data));
+    Render::IHyprRenderer::addPassElement(ctx, makeUnique<CRectPassElement>(data));
 }
 
-void renderBlur(PHLMONITOR monitor, const CBox& box, int rounding, float roundingPower, float alpha, bool usePrecomputedBlur) {
+void renderBlur(Render::CRenderContext& ctx, PHLMONITOR monitor, const CBox& box, int rounding, float roundingPower, float alpha, bool usePrecomputedBlur) {
     if (!monitor)
         return;
 
-    queueBlur(box, rounding, roundingPower, alpha, usePrecomputedBlur);
-    flushPass(monitor);
+    queueBlur(ctx, box, rounding, roundingPower, alpha, usePrecomputedBlur);
+    flushPass(ctx, monitor);
 }
 
 }

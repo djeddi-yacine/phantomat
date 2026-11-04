@@ -6,14 +6,14 @@
 
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
-#include <hyprland/src/desktop/Workspace.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/workspace/HLWorkspace.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
 #include <hyprland/src/xwayland/XSurface.hpp>
 #include <hyprland/src/xwayland/XWayland.hpp>
 #include <hyprland/src/config/ConfigManager.hpp>
 #include <hyprland/src/desktop/DesktopTypes.hpp>
 #include <hyprland/src/event/EventBus.hpp>
-#include <hyprland/src/managers/KeybindManager.hpp>
+#include <hyprland/src/keybinds/Manager.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/protocols/core/Compositor.hpp>
 #include <hyprland/src/render/ElementRenderer.hpp>
@@ -265,7 +265,7 @@ static void renderWorkspaceCanvasPlane(const SP<CScrollOverview>& overview) {
         renderingOverviewMonitor = previousMonitor;
         renderingOverview = previousRendering;
     });
-    overview->renderWorkspaceTransition();
+    overview->renderWorkspaceTransition(ctx);
 }
 
 static void renderWorkspaceWindowPlanes(void* thisptr, PHLMONITOR monitor, PHLWORKSPACE workspace, const Time::steady_tp& now, origWorkspaceWindows original) {
@@ -356,7 +356,7 @@ static void hkRenderWorkspace(void* thisptr, PHLMONITOR pMonitor, PHLWORKSPACE p
         renderingOverview                = true;
         renderingOverviewMonitor         = pMonitor;
         g_pScrollOverview                = overview;
-        overview->render();
+        overview->render(ctx);
         g_pScrollOverview = PREVOVERVIEW;
         renderingOverviewMonitor = PREVRENDERINGMONITOR;
         renderingOverview = PREVRENDERINGOVERVIEW;
@@ -416,17 +416,17 @@ static void hkDrawElement(void* thisptr, WP<IPassElement> element, const CRegion
     // draw time, so surfaces, borders and shadows share one finite viewport.
     const auto clippedDamage = damage.copy().intersect(*clip);
     const auto texture = element->type() == EK_TEXTURE ? Hyprutils::Memory::dynamicPointerCast<CTexPassElement>(element) : WP<CTexPassElement>{};
-    const auto& modif = g_pHyprRenderer->m_renderData.renderModif;
-    const bool cameraSurface = texture && texture->m_data.surface && g_pHyprRenderer->m_renderData.currentWindow &&
+    const auto& modif = ctx.m_data.renderModif;
+    const bool cameraSurface = texture && texture->m_data.surface && ctx.m_data.currentWindow &&
         modif.enabled && !modif.modifs.empty();
     // Surface damage is still in source coordinates here. The texture hook
     // projects it through the camera before deciding whether it is visible.
     if (clippedDamage.empty() && element->type() != EK_HINTS && !cameraSurface)
         return;
-    const auto previousDamage = g_pHyprRenderer->m_renderData.damage.copy();
-    g_pHyprRenderer->m_renderData.damage = previousDamage.copy().intersect(*clip);
+    const auto previousDamage = ctx.m_data.damage.copy();
+    ctx.m_data.damage = previousDamage.copy().intersect(*clip);
     auto restore = Hyprutils::Utils::CScopeGuard([previousDamage] {
-        g_pHyprRenderer->m_renderData.damage = previousDamage;
+        ctx.m_data.damage = previousDamage;
     });
     rc<origDrawElement>(g_pScrollDrawElementHook->m_original)(thisptr, element, clippedDamage);
 }
@@ -437,7 +437,7 @@ static void hkDrawTex(void* thisptr, WP<CTexPassElement> element, const CRegion&
         return;
     }
 
-    auto& renderModif = g_pHyprRenderer->m_renderData.renderModif;
+    auto& renderModif = ctx.m_data.renderModif;
     if (!renderModif.enabled || renderModif.modifs.empty()) {
         rc<origDrawTex>(g_pScrollDrawTexHook->m_original)(thisptr, element, damage);
         return;
@@ -448,10 +448,10 @@ static void hkDrawTex(void* thisptr, WP<CTexPassElement> element, const CRegion&
     // coordinates. Keep those masks attached to camera-transformed surfaces.
     const auto previousElementClipRegion = element->m_data.clipRegion.copy();
     const auto previousElementClipBox    = element->m_data.clipBox;
-    const auto previousRendererClipBox   = g_pHyprRenderer->m_renderData.clipBox;
+    const auto previousRendererClipBox   = ctx.m_data.clipBox;
 
     auto transformedDamage = damage.copy();
-    if (g_pHyprRenderer->m_renderData.currentWindow && element->m_data.surface) {
+    if (ctx.m_data.currentWindow && element->m_data.surface) {
         // The backing workspace's visibility calculation may expose only the
         // part of a window that intersected its original monitor. Canvas mode
         // deliberately renders that window elsewhere, so use the complete
@@ -461,28 +461,28 @@ static void hkDrawTex(void* thisptr, WP<CTexPassElement> element, const CRegion&
         transformedSurfaceBox.round();
         element->m_data.clipRegion = CRegion{transformedSurfaceBox};
         element->m_data.clipBox    = {};
-        g_pHyprRenderer->m_renderData.clipBox = {};
+        ctx.m_data.clipBox = {};
         transformedDamage                    = CRegion{transformedSurfaceBox};
     } else {
         if (!element->m_data.clipRegion.empty())
             renderModif.applyToRegion(element->m_data.clipRegion);
         if (!element->m_data.clipBox.empty())
             renderModif.applyToBox(element->m_data.clipBox);
-        else if (!g_pHyprRenderer->m_renderData.clipBox.empty())
-            renderModif.applyToBox(g_pHyprRenderer->m_renderData.clipBox);
+        else if (!ctx.m_data.clipBox.empty())
+            renderModif.applyToBox(ctx.m_data.clipBox);
     }
 
     if (const auto* clip = OverviewRender::canvasViewportClip) {
         transformedDamage.intersect(*clip);
         element->m_data.clipRegion.intersect(*clip);
-        g_pHyprRenderer->m_renderData.clipBox = *clip;
+        ctx.m_data.clipBox = *clip;
     }
 
     rc<origDrawTex>(g_pScrollDrawTexHook->m_original)(thisptr, element, transformedDamage);
 
     element->m_data.clipRegion = previousElementClipRegion;
     element->m_data.clipBox    = previousElementClipBox;
-    g_pHyprRenderer->m_renderData.clipBox = previousRendererClipBox;
+    ctx.m_data.clipBox = previousRendererClipBox;
 }
 
 static void hkElementDrawTex(void* thisptr, WP<CTexPassElement> element, const CRegion& damage) {
@@ -491,8 +491,8 @@ static void hkElementDrawTex(void* thisptr, WP<CTexPassElement> element, const C
         return;
     }
 
-    auto& renderModif = g_pHyprRenderer->m_renderData.renderModif;
-    if (!renderModif.enabled || renderModif.modifs.empty() || !g_pHyprRenderer->m_renderData.currentWindow || !element->m_data.surface) {
+    auto& renderModif = ctx.m_data.renderModif;
+    if (!renderModif.enabled || renderModif.modifs.empty() || !ctx.m_data.currentWindow || !element->m_data.surface) {
         rc<origElementDrawTex>(g_pScrollElementDrawTexHook->m_original)(thisptr, element, damage);
         return;
     }
@@ -508,7 +508,7 @@ static void hkElementDrawTex(void* thisptr, WP<CTexPassElement> element, const C
     const auto previousElementBox        = element->m_data.box;
     const auto previousElementClipRegion = element->m_data.clipRegion.copy();
     const auto previousElementClipBox    = element->m_data.clipBox;
-    const auto previousRendererClipBox   = g_pHyprRenderer->m_renderData.clipBox;
+    const auto previousRendererClipBox   = ctx.m_data.clipBox;
 
     renderModif.applyToBox(element->m_data.box);
     element->m_data.box.round();
@@ -523,7 +523,7 @@ static void hkElementDrawTex(void* thisptr, WP<CTexPassElement> element, const C
         element->m_data.clipRegion = transformedDamage;
         element->m_data.clipBox = *clip;
     }
-    g_pHyprRenderer->m_renderData.clipBox = {};
+    ctx.m_data.clipBox = {};
     renderModif                           = {};
 
     rc<origElementDrawTex>(g_pScrollElementDrawTexHook->m_original)(thisptr, element, transformedDamage);
@@ -532,7 +532,7 @@ static void hkElementDrawTex(void* thisptr, WP<CTexPassElement> element, const C
     element->m_data.box                      = previousElementBox;
     element->m_data.clipRegion               = previousElementClipRegion;
     element->m_data.clipBox                  = previousElementClipBox;
-    g_pHyprRenderer->m_renderData.clipBox     = previousRendererClipBox;
+    ctx.m_data.clipBox     = previousRendererClipBox;
 }
 
 // Title-bar drags of apps that draw their own (xdg move/resize requests) run
@@ -683,14 +683,14 @@ static bool openOverview(PHLMONITOR monitor, bool workspaceBoundCanvas = false) 
     if (const auto retained = workspaceBoundCanvas ? workspaceTransitionOverviewFor(monitor, monitor->m_activeWorkspace) : SP<IOverview>{}) {
         registerScrollOverview(retained);
         static_cast<CScrollOverview*>(retained.get())->resumeAfterWorkspaceSwitch();
-        Log::logger->log(Log::DEBUG, "[spatialoverview] resumed workspace Canvas {}", monitor->m_activeWorkspace->m_id);
+        Log::logger->log(Log::DEBUG, "[spatialoverview] resumed workspace Canvas {}", workspaceID(monitor->m_activeWorkspace));
     } else {
         auto overview = makeShared<CScrollOverview>(monitor->m_activeWorkspace, false, monitor, workspaceBoundCanvas);
         registerScrollOverview(overview);
         if (workspaceBoundCanvas)
             overview->restoreWorkspaceOverview();
         if (workspaceBoundCanvas)
-            Log::logger->log(Log::DEBUG, "[spatialoverview] created workspace Canvas {}", monitor->m_activeWorkspace->m_id);
+            Log::logger->log(Log::DEBUG, "[spatialoverview] created workspace Canvas {}", workspaceID(monitor->m_activeWorkspace));
     }
     renderingOverview = PREVRENDERINGOVERVIEW;
     canvasReclaimScreen(monitor);
@@ -1380,7 +1380,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     g_workspaceCanvasSyncIdle = nullptr;
     if (g_workspaceCanvasTransitionTimer) wl_event_source_remove(g_workspaceCanvasTransitionTimer);
     g_workspaceCanvasTransitionTimer = nullptr;
-    g_pHyprRenderer->m_renderPass.removeAllOfType("CScrollOverviewPassElement");
+    Render::IHyprRenderer::currentPass(ctx).removeAllOfType("CScrollOverviewPassElement");
 
     g_unloading = true;
     if (g_stateCommand)

@@ -13,7 +13,7 @@
 #include <hyprland/src/config/values/types/IntValue.hpp>
 #include <hyprland/src/config/values/types/StringValue.hpp>
 #include <hyprland/src/config/values/types/GradientValue.hpp>
-#include <hyprland/src/managers/KeybindManager.hpp>
+#include <hyprland/src/keybinds/Manager.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 

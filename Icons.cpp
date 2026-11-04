@@ -14,7 +14,7 @@
 #include <vector>
 
 #include <hyprgraphics/image/Image.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
 
 namespace SpatialOverview::Icons {
     namespace {

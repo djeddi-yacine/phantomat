@@ -11,10 +11,10 @@
 #include <unordered_set>
 
 #include <hyprland/src/Compositor.hpp>
-#include <hyprland/src/desktop/Workspace.hpp>
+#include <hyprland/src/workspace/HLWorkspace.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
 #include <hyprland/src/desktop/view/Group.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
 
 static std::string canvasLowercaseAscii(std::string value) {
     std::ranges::transform(value, value.begin(), [](unsigned char c) { return sc<char>(std::tolower(c)); });
