@@ -10769,15 +10769,12 @@ bool CScrollOverview::nudgeWindow(PHLWINDOW window, const Vector2D& direction, b
 
     if (checkpoint)
         checkpointCanvas();
-    const float STEP     = std::max(8, ScrollOverview::Config::getCanvasGridSize());
-    const auto  PREVIOUS = window->getFullWindowBoundingBox();
-    auto        BOX      = TARGET->position();
+    const float STEP = std::max(8, ScrollOverview::Config::getCanvasGridSize());
+    auto        BOX  = TARGET->position();
     BOX.translate(direction * STEP);
     TARGET->setPositionGlobal(BOX);
     TARGET->warpPositionSize();
     TARGET->damageEntire();
-    // The step is a jump, not an animation; report it so wobble springs.
-    window->effects().onPositionUpdate(PREVIOUS, window->getFullWindowBoundingBox(), Desktop::View::WINDOW_UPDATE_ANIMATION);
 
     // Only chase the window once it starts to leave the view; otherwise the
     // world would appear to slide under a window that stands still.

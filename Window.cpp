@@ -1,5 +1,6 @@
 #include "Window.hpp"
 #include <hyprland/src/render/pass/TransformedWindowPassElement.hpp>
+#include <hyprland/src/desktop/view/window/WindowEffectsController.hpp>
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -712,9 +713,15 @@ void renderOverviewWindow(Render::CRenderContext& ctx, const SRenderParams& prev
     const Vector2D previousWorkspaceOffset = OVERRIDEWORKSPACEOFFSET ? WORKSPACE->m_renderOffset->value() : Vector2D{};
     const float    previousWorkspaceAlpha  = OVERRIDEWORKSPACEOFFSET && WORKSPACE->m_alpha ? WORKSPACE->m_alpha->value() : 1.F;
     std::optional<Render::SRenderModifData> cameraTransform;
-    CBox                                    cameraSourceBox; // the real window, where renderWindow puts its surfaces
 
-    if (params.cameraTransform && params.monitor) {
+    // A wobbling (transformed) window is drawn like a dragged preview: at its
+    // final size on screen, not at its real size and shrunk by the camera
+    // afterwards. Shrinking the finished picture thins its border and aliases
+    // the edges; at preview size the wobble, border and surfaces are exact. It
+    // returns to the camera path as soon as the wobble has settled.
+    const bool USECAMERA = params.cameraTransform && !params.window->effects().hasActiveTransformers();
+
+    if (USECAMERA && params.monitor) {
         const auto SOURCEGEOMETRY = params.window->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
         // Match renderWindow's surface origin, including Hyprland's temporary
         // floating correction during workspace slides. It is not camera motion.
@@ -722,7 +729,6 @@ void renderOverviewWindow(Render::CRenderContext& ctx, const SRenderParams& prev
             (SOURCEGEOMETRY.pos() + params.window->presentation().floatingOffset() - params.monitor->m_position) * params.monitor->m_scale,
             SOURCEGEOMETRY.size() * params.monitor->m_scale,
         };
-        cameraSourceBox = SOURCEBOX;
 
         Render::SRenderModifData transform;
         transform.modifs.emplace_back(Render::SRenderModifData::RMOD_TYPE_SCALE, params.renderScale);
@@ -780,25 +786,11 @@ void renderOverviewWindow(Render::CRenderContext& ctx, const SRenderParams& prev
     roundStandaloneWindowPassElements(params.window, params.monitor, params.renderScale, windowPass);
 
     // A transformed window (wobble, motion blur) is drawn from its own pass.
-    // The border joins that pass so it bends with the surfaces, in their
-    // space: the real window under the camera, or the preview without one.
+    // The border joins that pass so it bends with the surfaces.
     bool borderInWindowPass = false;
     if (auto* transformed = fullscreen ? nullptr : transformedWindowElement(params.window, windowPass)) {
-        // The pass is drawn in the window's own pixels and then scaled by the
-        // camera, so its border is thickened by the inverse: the screen
-        // thickness stays what it is when the window is not transformed, and
-        // the border does not jump when a wobble starts or ends.
-        const float INNERSCALE   = cameraTransform ? 1.F : params.renderScale;
-        const CBox  INNERBOX     = cameraTransform ? cameraSourceBox : params.windowBox;
-        auto        innerMetrics = getOverviewWindowMetrics(params.monitor, params.window, INNERSCALE);
-        if (cameraTransform) {
-            const float INNER = innerMetrics.borderSize / std::max(params.renderScale, 0.05F);
-            if (innerMetrics.roundingPx > 0)
-                innerMetrics.outerRoundPx += sc<int>(std::round(INNER - innerMetrics.borderSize));
-            innerMetrics.borderSize = INNER;
-        }
         auto redirect = Render::IHyprRenderer::redirectPass(ctx, transformed->m_data.pass.get());
-        renderOverviewWindowBorder(ctx, params.monitor, params.window, INNERBOX, innerMetrics, colors, params.selected);
+        renderOverviewWindowBorder(ctx, params.monitor, params.window, params.windowBox, metrics, colors, params.selected);
         borderInWindowPass = true;
     }
 
