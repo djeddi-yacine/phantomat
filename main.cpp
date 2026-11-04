@@ -728,13 +728,20 @@ static std::vector<PHLMONITOR> overviewTargetMonitors(const std::string& target)
     return MONITOR ? std::vector<PHLMONITOR>{MONITOR} : std::vector<PHLMONITOR>{};
 }
 
-// 0.57 no longer exposes which bind is running, so a mouse bind can no longer
-// target the overview under the pointer specifically. Prefer the pointer's
-// overview, then the focused one.
+// 0.57 does not say which bind is running, but it does keep the inputs held
+// down: a mouse button held means a mouse bind, which acts on the overview under
+// the pointer. Keyboard binds act on the focused screen's overview.
+// ponytail: wheel binds are momentary and count as keyboard binds here.
+static bool mouseBindRunning() {
+    if (!Keybinds::mgr())
+        return false;
+    return std::ranges::any_of(Keybinds::mgr()->inputState().pressed(),
+                               [](const Keybinds::SPressedInput& input) { return input.key.event && input.key.event->starts_with("mouse"); });
+}
+
 static SP<IOverview> dispatcherOverview() {
-    if (g_pInputManager)
-        if (const auto UNDERPOINTER = scrollOverviewAt(g_pInputManager->getMouseCoordsInternal()))
-            return UNDERPOINTER;
+    if (mouseBindRunning() && g_pInputManager)
+        return scrollOverviewAt(g_pInputManager->getMouseCoordsInternal());
 
     return activeScrollOverview();
 }
