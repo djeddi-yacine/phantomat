@@ -781,11 +781,21 @@ void renderOverviewWindow(Render::CRenderContext& ctx, const SRenderParams& prev
     // space: the real window under the camera, or the preview without one.
     bool borderInWindowPass = false;
     if (auto* transformed = fullscreen ? nullptr : transformedWindowElement(params.window, windowPass)) {
-        const float INNERSCALE = cameraTransform ? 1.F : params.renderScale;
-        const CBox  INNERBOX   = cameraTransform ? cameraSourceBox : params.windowBox;
-        auto        redirect   = Render::IHyprRenderer::redirectPass(ctx, transformed->m_data.pass.get());
-        renderOverviewWindowBorder(ctx, params.monitor, params.window, INNERBOX, getOverviewWindowMetrics(params.monitor, params.window, INNERSCALE), colors,
-                                   params.selected);
+        // The pass is drawn in the window's own pixels and then scaled by the
+        // camera, so its border is thickened by the inverse: the screen
+        // thickness stays what it is when the window is not transformed, and
+        // the border does not jump when a wobble starts or ends.
+        const float INNERSCALE   = cameraTransform ? 1.F : params.renderScale;
+        const CBox  INNERBOX     = cameraTransform ? cameraSourceBox : params.windowBox;
+        auto        innerMetrics = getOverviewWindowMetrics(params.monitor, params.window, INNERSCALE);
+        if (cameraTransform) {
+            const float INNER = innerMetrics.borderSize / std::max(params.renderScale, 0.05F);
+            if (innerMetrics.roundingPx > 0)
+                innerMetrics.outerRoundPx += sc<int>(std::round(INNER - innerMetrics.borderSize));
+            innerMetrics.borderSize = INNER;
+        }
+        auto redirect = Render::IHyprRenderer::redirectPass(ctx, transformed->m_data.pass.get());
+        renderOverviewWindowBorder(ctx, params.monitor, params.window, INNERBOX, innerMetrics, colors, params.selected);
         borderInWindowPass = true;
     }
 

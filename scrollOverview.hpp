@@ -191,6 +191,7 @@ class CScrollOverview : public IOverview {
     Vector2D canvasCameraOffsetFor(const PHLWINDOW& window, float zoom, bool navigating) const;
     void   renderNavigatorWindowOverlay(Render::CRenderContext& ctx, PHLMONITOR monitor, PHLWINDOW window, const CBox& windowBox);
     PHLWINDOW selectionOutlineWindow() const;
+    float     outlineMotionFade(bool moving);
     void   queueSelectionOutline(Render::CRenderContext& ctx, PHLMONITOR monitor, const PHLWINDOW& window, const CBox& box);
     void   renderNavigatorReticle(Render::CRenderContext& ctx, PHLMONITOR monitor, const Time::steady_tp& now);
     void   renderNavigatorHud(Render::CRenderContext& ctx, PHLMONITOR monitor);
@@ -355,6 +356,8 @@ class CScrollOverview : public IOverview {
     Vector2D                         resizeLastMouseLocal  = Vector2D{};
     Vector2D                         scrollingPanLastMouseLocal = Vector2D{};
     CBox                             dragOriginalBox            = CBox{};
+    float                            outlineFade                = 1.F; // selection outline visibility, eased while its client moves
+    Time::steady_tp                  outlineFadeUpdated         = {};
     CBox                             dragWobbleBox              = CBox{}; // last on-screen preview box reported to the wobble effect
     CBox                             dragOriginalVisualBox      = CBox{};
     CBox                             dragOriginalOverviewBox    = CBox{};

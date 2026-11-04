@@ -11521,6 +11521,27 @@ void CScrollOverview::renderNavigatorWindowOverlay(Render::CRenderContext& ctx, 
     Render::IHyprRenderer::addPassElement(ctx, makeUnique<CTexPassElement>(data));
 }
 
+// Eases the outline's visibility toward 0 while its client moves (about
+// 80 ms) and back toward 1 once it has settled (about 220 ms), per frame.
+float CScrollOverview::outlineMotionFade(bool moving) {
+    const auto  NOW = Time::steadyNow();
+    const float DT  = outlineFadeUpdated == Time::steady_tp{} ? 0.F : std::min(0.1F, std::chrono::duration<float>(NOW - outlineFadeUpdated).count());
+    outlineFadeUpdated = NOW;
+
+    const float TARGET = moving ? 0.F : 1.F;
+    const float SPEED  = moving ? 1.F / 0.08F : 1.F / 0.22F;
+    if (outlineFade < TARGET)
+        outlineFade = std::min(TARGET, outlineFade + DT * SPEED);
+    else if (outlineFade > TARGET)
+        outlineFade = std::max(TARGET, outlineFade - DT * SPEED);
+
+    if (outlineFade != TARGET)
+        damage(); // keep the fade running
+    else
+        outlineFadeUpdated = {};
+    return outlineFade;
+}
+
 // The client the HUD selection outline belongs to, or nothing.
 PHLWINDOW CScrollOverview::selectionOutlineWindow() const {
     const bool FROZEN = workspaceSwitchClose && navigatorFrame;
@@ -11542,8 +11563,11 @@ void CScrollOverview::queueSelectionOutline(Render::CRenderContext& ctx, PHLMONI
     if (!monitor || !window || FADE <= 0.01F || box.empty() || !overviewBoxIntersectsMonitor(box.copy().expand(16.F), monitor))
         return;
     // The outline stands outside the window, where a wobble cannot bend it.
+    // While its client moves it fades out quickly, and fades back in once the
+    // client has settled, instead of vanishing and popping back.
     const bool MOVING = window == getOverviewWindowToShow(dragActiveWindow.lock()) || window->effects().hasActiveTransformers();
-    if (MOVING && ScrollOverview::Config::getNavigatorHideOutlineInMotion())
+    const float MOTIONFADE = ScrollOverview::Config::getNavigatorHideOutlineInMotion() ? outlineMotionFade(MOVING) : 1.F;
+    if (MOTIONFADE <= 0.01F)
         return;
 
     const float SCALE    = std::max(monitor->m_scale, 0.01F);
@@ -11553,7 +11577,7 @@ void CScrollOverview::queueSelectionOutline(Render::CRenderContext& ctx, PHLMONI
     CBorderPassElement::SBorderData border;
     border.box        = box.copy().expand(GAP).round();
     border.grad1      = Config::CGradientValueData{SpatialOverview::Hud::theme().accent};
-    border.a          = FADE;
+    border.a          = FADE * MOTIONFADE;
     border.borderSize = std::max(2, sc<int>(std::round(2.F * SCALE)));
     // Expanding a square window must not manufacture rounded selection corners.
     border.round         = ROUNDING > 0 ? ROUNDING + sc<int>(GAP) : 0;
