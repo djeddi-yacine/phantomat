@@ -1017,7 +1017,17 @@ static bool navigatorPassesThrough(uint32_t keysym, Input::ModifierMask mods) {
         return true;
     if ((mods & HL_MODIFIER_ALT) && (keysym == XKB_KEY_Tab || keysym == XKB_KEY_ISO_Left_Tab))
         return true;
-    return (mods & HL_MODIFIER_CTRL) && (mods & HL_MODIFIER_ALT);
+    if ((mods & HL_MODIFIER_CTRL) && (mods & HL_MODIFIER_ALT))
+        return true;
+
+    // A chord the user bound in Hyprland (Ctrl, Alt or Super held) is theirs,
+    // e.g. the overview's own toggle key: it closes the HUD instead of typing
+    // into the search. Plain and Shift-only keys always go to the search.
+    const auto CHORD = mods & (HL_MODIFIER_CTRL | HL_MODIFIER_ALT | HL_MODIFIER_META);
+    if (!sc<bool>(CHORD) || !Keybinds::mgr())
+        return false;
+    const auto BIND = Keybinds::mgr()->registry().findShortcutConflict(keysym, mods & ~(HL_MODIFIER_CAPS | HL_MODIFIER_MOD2));
+    return BIND && (BIND->metadata().submap == Keybinds::mgr()->currentSubmap() || BIND->hasFlag(Keybinds::BIND_FLAG_SUBMAP_UNIVERSAL));
 }
 
 static bool isModifierKeysym(uint32_t keysym) {
