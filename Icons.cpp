@@ -265,7 +265,7 @@ namespace SpatialOverview::Icons {
         const std::string* pathFor(const PHLWINDOW& window) {
             if (!window)
                 return nullptr;
-            const auto APPID = window->m_class.empty() ? window->m_initialClass : window->m_class;
+            const auto APPID = window->metadata().appID().empty() ? window->metadata().initialAppID() : window->metadata().appID();
             if (APPID.empty())
                 return nullptr;
             auto pathIt = g_paths.find(APPID);

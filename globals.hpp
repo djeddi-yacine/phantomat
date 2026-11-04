@@ -2,6 +2,10 @@
 
 #include <hyprland/src/plugins/PluginAPI.hpp>
 #include <hyprland/src/workspace/HLWorkspace.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
+#include <hyprland/src/desktop/view/window/WindowBackend.hpp>
+#include <hyprland/src/desktop/view/window/WindowGroupMembership.hpp>
+#include <hyprland/src/desktop/view/window/WindowPresentation.hpp>
 
 #include <functional>
 
@@ -22,4 +26,8 @@ inline WORKSPACEID workspaceID(const PHLWORKSPACE& workspace) {
     if (const auto NUMBER = workspace->numberedID())
         return *NUMBER;
     return -2 - sc<WORKSPACEID>(std::hash<std::string>{}(workspace->addressableName()) & 0x3fffffffffffffffULL);
+}
+
+inline bool windowPinned(const PHLWINDOW& window) {
+    return window && (window->m_state & Desktop::View::WINDOW_STATE_PINNED);
 }

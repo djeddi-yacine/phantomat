@@ -224,7 +224,7 @@ static bool canvasFullscreenWindow(const PHLWINDOW& window) {
 static bool isScreensaverWindow(const PHLWINDOW& window) {
     if (!window)
         return false;
-    const auto APPID = window->m_class.empty() ? window->m_initialClass : window->m_class;
+    const auto APPID = window->metadata().appID().empty() ? window->metadata().initialAppID() : window->metadata().appID();
     return APPID == "org.omarchy.screensaver" || APPID.ends_with(".screensaver");
 }
 // Each window's box when the canvas last drew it outside fullscreen. After
@@ -405,7 +405,7 @@ static std::set<std::string> canvasContextTokens(const PHLWINDOW& window) {
     }();
 
     std::set<std::string> result;
-    const auto TEXT = canvasLowercase(window ? window->m_title + " " + window->m_class : std::string{});
+    const auto TEXT = canvasLowercase(window ? window->metadata().title() + " " + window->metadata().appID() : std::string{});
     std::string token;
     const auto commit = [&] {
         if (token.size() >= 4 && !STOPWORDS.contains(token))
@@ -580,8 +580,8 @@ static PHLWINDOW getOverviewWindowToShow(const PHLWINDOW& window) {
     if (!window)
         return nullptr;
 
-    if (window->m_group)
-        return window->m_group->current();
+    if (window->grouping().group())
+        return window->grouping().group()->current();
 
     return window;
 }
@@ -595,11 +595,11 @@ static bool shouldShowOverviewWindow(const PHLWINDOW& window) {
     if (WINDOW->m_workspace && WINDOW->m_workspace->m_isSpecialWorkspace)
         return false;
 
-    if (WINDOW->m_pinned && WINDOW->m_isFloating)
+    if (windowPinned(WINDOW) && WINDOW->isFloating())
         return false;
 
     // X11 menus and tooltips belong to the screen, not the canvas.
-    if (WINDOW->m_isX11 && WINDOW->isX11OverrideRedirect())
+    if (WINDOW->backend().isX11() && WINDOW->backend().traits().overrideRedirect)
         return false;
 
     // Fullscreen on a screen of its own: Hyprland shows it there, natively.
@@ -617,9 +617,9 @@ static bool shouldShowOverviewWindow(const PHLWINDOW& window) {
 static bool canvasScreenFixedWindow(const PHLWINDOW& window) {
     if (!validMapped(window) || window->isHidden())
         return false;
-    if (window->m_isX11 && window->isX11OverrideRedirect())
+    if (window->backend().isX11() && window->backend().traits().overrideRedirect)
         return true;
-    return window->m_pinned && window->m_isFloating && !(window->m_workspace && window->m_workspace->m_isSpecialWorkspace);
+    return windowPinned(window) && window->isFloating() && !(window->m_workspace && window->m_workspace->m_isSpecialWorkspace);
 }
 
 static bool shouldShowPinnedFloatingOverviewWindow(const PHLWINDOW& window) {
@@ -628,7 +628,7 @@ static bool shouldShowPinnedFloatingOverviewWindow(const PHLWINDOW& window) {
     if (!validMapped(WINDOW))
         return false;
 
-    if (!WINDOW->m_pinned || !WINDOW->m_isFloating)
+    if (!windowPinned(WINDOW) || !WINDOW->isFloating())
         return false;
 
     return true;
@@ -669,7 +669,7 @@ static void surfaceTreePresent(SP<CWLSurfaceResource> surface, PHLMONITOR monito
 // animate menus on frame callbacks (Chromium fades them in step by step), so
 // a popup that never gets frames stays stuck at its first, faint step.
 static void popupTreePresent(const PHLWINDOW& window, PHLMONITOR monitor, const Time::steady_tp& now) {
-    if (!window || window->m_isX11 || !window->m_popupHead)
+    if (!window || window->backend().isX11() || !window->m_popupHead)
         return;
     window->m_popupHead->breadthfirst(
         [&monitor, &now](WP<Desktop::View::CPopup> popup, void*) {
@@ -751,7 +751,7 @@ static CBox getOverviewDragWindowBox(const PHLWINDOW& window, PHLMONITOR monitor
         return {};
 
     const auto TARGET = window->layoutTarget();
-    if (window->m_group && TARGET)
+    if (window->grouping().group() && TARGET)
         return getOverviewGlobalBox(TARGET->position(), monitor, scale, viewOffset, offset, layout, round);
 
     return getOverviewWindowBox(window, monitor, scale, viewOffset, offset, layout, round);
@@ -763,7 +763,7 @@ static CBox getOverviewDragWindowBox(const PHLWINDOW& window, PHLMONITOR monitor
         return {};
 
     const auto TARGET = window->layoutTarget();
-    if (window->m_group && TARGET)
+    if (window->grouping().group() && TARGET)
         return getOverviewGlobalBox(TARGET->position(), monitor, scale, viewOffset, offset, layout, round);
 
     return getOverviewWindowBox(window, monitor, scale, viewOffset, offset, layout, round);
@@ -1567,7 +1567,7 @@ static void saveWorkspaceCanvasMemory(const CScrollOverview& canvas) {
     std::vector<SpatialOverview::Memory::SWindowPlacement> placements;
     for (const auto& windowRef : Desktop::windowState()->windows()) {
         const auto WINDOW = getOverviewWindowToShow(windowRef);
-        if (!shouldShowOverviewWindow(WINDOW) || !canvas.canvasWindowInWorkspace(WINDOW) || WINDOW->m_pinned || !WINDOW->layoutTarget() || !WINDOW->layoutTarget()->floating())
+        if (!shouldShowOverviewWindow(WINDOW) || !canvas.canvasWindowInWorkspace(WINDOW) || windowPinned(WINDOW) || !WINDOW->layoutTarget() || !WINDOW->layoutTarget()->floating())
             continue;
         placements.push_back({.window = WINDOW, .box = WINDOW->layoutTarget()->position(), .workspace = SCOPE});
     }
@@ -2369,12 +2369,12 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
 
         bool owned = window && canvasWindowInWorkspace(window);
         if (workspaceBoundCanvas && window) {
-            if (const auto IT = g_canvasNativeLayout.find(window->m_stableID); IT != g_canvasNativeLayout.end())
+            if (const auto IT = g_canvasNativeLayout.find(window->metadata().stableID()); IT != g_canvasNativeLayout.end())
                 owned = IT->second.workspace.lock() == startedOn;
         }
         if (window && owned) {
-            g_canvasNativeLayout.erase(window->m_stableID);
-            g_canvasSpatialLayout.erase(window->m_stableID);
+            g_canvasNativeLayout.erase(window->metadata().stableID());
+            g_canvasSpatialLayout.erase(window->metadata().stableID());
             if (window->layoutTarget()) g_canvasManagedTargets.erase(window->layoutTarget().get());
             if (navigatorHoverWindow.lock() == window)
                 navigatorHoverWindow.reset();
@@ -2389,7 +2389,7 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
             return;
 
         if (workspaceBoundCanvas && !g_canvasRestoring && window && workspace != startedOn) {
-            const auto IT = g_canvasNativeLayout.find(window->m_stableID);
+            const auto IT = g_canvasNativeLayout.find(window->metadata().stableID());
             if (IT != g_canvasNativeLayout.end() && IT->second.workspace.lock() == startedOn) {
                 const auto SAVED = IT->second;
                 const auto ID = IT->first;
@@ -2419,7 +2419,7 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
 
         const auto fullscreenWindow = overviewWindow && overviewWindow->m_workspace ? getOverviewWindowToShow(Fullscreen::controller()->getFullscreenWindow(overviewWindow->m_workspace)) : PHLWINDOW{};
 
-        if (shouldShowOverviewWindow(fullscreenWindow) && fullscreenWindow->m_workspace == overviewWindow->m_workspace && overviewWindow->m_isFloating)
+        if (shouldShowOverviewWindow(fullscreenWindow) && fullscreenWindow->m_workspace == overviewWindow->m_workspace && overviewWindow->isFloating())
             emitFullscreenVisibilityState(fullscreenWindow, true);
         else
             emitFullscreenVisibilityState(overviewWindow, true);
@@ -3209,7 +3209,7 @@ void CScrollOverview::updateWorkspaceOverflow() {
 
         for (const auto& windowRef : img->windows) {
             const auto window = getOverviewWindowToShow(windowRef.lock());
-            if (!shouldShowOverviewWindow(window) || (window->m_isFloating && !ScrollOverview::Config::getCanvasAllowWindowOverflow()))
+            if (!shouldShowOverviewWindow(window) || (window->isFloating() && !ScrollOverview::Config::getCanvasAllowWindowOverflow()))
                 continue;
 
             const auto POS  = window->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) - MONITOR->m_position;
@@ -3281,7 +3281,7 @@ PHLWINDOW CScrollOverview::windowAtOverviewPoint(const Vector2D& point, size_t* 
         if (!isWorkspaceScrolling(wimg->pWorkspace) && shouldShowOverviewWindow(fullscreenWindow)) {
             for (auto it = wimg->windows.rbegin(); it != wimg->windows.rend(); ++it) {
                 const auto window = getOverviewWindowToShow(it->lock());
-                if (!shouldShowOverviewWindow(window) || !window->m_isFloating)
+                if (!shouldShowOverviewWindow(window) || !window->isFloating())
                     continue;
 
                 const auto texbox = getOverviewWindowBox(window, MONITOR, scale->value(), viewOffset->value(), offset, layout);
@@ -3301,7 +3301,7 @@ PHLWINDOW CScrollOverview::windowAtOverviewPoint(const Vector2D& point, size_t* 
         for (const bool floating : {true, false}) {
             for (auto it = wimg->windows.rbegin(); it != wimg->windows.rend(); ++it) {
                 const auto window = getOverviewWindowToShow(it->lock());
-                if (!shouldShowOverviewWindow(window) || window->m_isFloating != floating)
+                if (!shouldShowOverviewWindow(window) || window->isFloating() != floating)
                     continue;
 
                 const auto texbox = getOverviewWindowBox(window, MONITOR, scale->value(), viewOffset->value(), offset, layout);
@@ -3340,7 +3340,7 @@ PHLWINDOW CScrollOverview::windowClosestToWorkspaceCenter(size_t workspaceIdx) c
         const auto WINDOW = getOverviewWindowToShow(windowRef.lock());
         if (!shouldShowOverviewWindow(WINDOW))
             continue;
-        if (HASFULLSCREENPATH && WINDOW != FULLSCREENWINDOW && !WINDOW->m_isFloating)
+        if (HASFULLSCREENPATH && WINDOW != FULLSCREENWINDOW && !WINDOW->isFloating())
             continue;
 
         const auto WINDOWBOX = getOverviewWindowBox(WINDOW, MONITOR, SCALE, viewOffset->value(), WORKSPACEOFFSET, layout);
@@ -3370,7 +3370,7 @@ PHLWINDOW CScrollOverview::windowAtOverviewCursorOnWorkspace(size_t workspaceIdx
     for (const bool floating : {true, false}) {
         for (auto it = images[workspaceIdx]->windows.rbegin(); it != images[workspaceIdx]->windows.rend(); ++it) {
             const auto WINDOW = getOverviewWindowToShow(it->lock());
-            if (!shouldShowOverviewWindow(WINDOW) || WINDOW == ignoredWindow || WINDOW->m_isFloating != floating)
+            if (!shouldShowOverviewWindow(WINDOW) || WINDOW == ignoredWindow || WINDOW->isFloating() != floating)
                 continue;
 
             const auto box    = getOverviewWindowBox(WINDOW, MONITOR, scale->value(), viewOffset->value(), WORKSPACE_OFFSET, layout);
@@ -3525,7 +3525,7 @@ CDropIndicator::SDropAnchor CScrollOverview::dropAnchorAtOverviewCursorOnWorkspa
     float bestDistanceSq = std::numeric_limits<float>::max();
     for (auto it = IMAGE->windows.rbegin(); it != IMAGE->windows.rend(); ++it) {
         const auto WINDOW = getOverviewWindowToShow(it->lock());
-        if (!shouldShowOverviewWindow(WINDOW) || WINDOW == ignoredWindow || WINDOW->m_isFloating)
+        if (!shouldShowOverviewWindow(WINDOW) || WINDOW == ignoredWindow || WINDOW->isFloating())
             continue;
 
         const auto [BOX, LOGICALBOX] = boxesForWindow(WINDOW);
@@ -3556,7 +3556,7 @@ CDropIndicator::SDropAnchor CScrollOverview::dropAnchorAtOverviewCursorOnWorkspa
 
     for (const auto& windowRef : IMAGE->windows) {
         const auto WINDOW = getOverviewWindowToShow(windowRef.lock());
-        if (!shouldShowOverviewWindow(WINDOW) || WINDOW == ignoredWindow || WINDOW->m_isFloating)
+        if (!shouldShowOverviewWindow(WINDOW) || WINDOW == ignoredWindow || WINDOW->isFloating())
             continue;
 
         const auto [BOX, LOGICALBOX] = boxesForWindow(WINDOW);
@@ -3576,7 +3576,7 @@ CDropIndicator::SDropAnchor CScrollOverview::dropAnchorAtOverviewCursorOnWorkspa
 
     for (const auto& windowRef : IMAGE->windows) {
         const auto WINDOW = getOverviewWindowToShow(windowRef.lock());
-        if (!shouldShowOverviewWindow(WINDOW) || WINDOW == ignoredWindow || WINDOW->m_isFloating)
+        if (!shouldShowOverviewWindow(WINDOW) || WINDOW == ignoredWindow || WINDOW->isFloating())
             continue;
 
         const auto [BOX, LOGICALBOX] = boxesForWindow(WINDOW);
@@ -3640,7 +3640,7 @@ PHLWORKSPACE CScrollOverview::workspaceAtOverviewDropPoint(const Vector2D& point
         for (const bool floating : {true, false}) {
             for (auto it = wimg->windows.rbegin(); it != wimg->windows.rend(); ++it) {
                 const auto WINDOW = getOverviewWindowToShow(it->lock());
-                if (!shouldShowOverviewWindow(WINDOW) || WINDOW == draggedWindow || WINDOW->m_isFloating != floating)
+                if (!shouldShowOverviewWindow(WINDOW) || WINDOW == draggedWindow || WINDOW->isFloating() != floating)
                     continue;
 
                 const auto WINDOWBOX = getOverviewDragWindowBox(WINDOW, MONITOR, scale->value(), viewOffset->value(), WORKSPACEOFFSET, layout);
@@ -3869,7 +3869,7 @@ struct SX11Sync {
 static std::unordered_map<const Desktop::View::CWindow*, SX11Sync> g_x11Sync;
 
 static bool canvasManagesX11(const PHLWINDOW& window) {
-    return window && window->m_isX11 && !window->isX11OverrideRedirect() && window->m_xwaylandSurface && shouldShowOverviewWindow(window) && !window->m_pinned;
+    return window && window->backend().isX11() && !window->backend().traits().overrideRedirect && window->m_xwaylandSurface && shouldShowOverviewWindow(window) && !windowPinned(window);
 }
 
 static SX11Sync* x11Sync(const PHLWINDOW& window, bool create) {
@@ -3967,7 +3967,7 @@ void CScrollOverview::canvasClaimX11Window(const PHLWINDOW& window) {
 CBox canvasX11Configure(void* surface, const CBox& box) {
     PHLWINDOW window;
     for (const auto& w : Desktop::windowState()->windows()) {
-        if (w && w->m_isX11 && w->m_xwaylandSurface.get() == surface) {
+        if (w && w->backend().isX11() && w->m_xwaylandSurface.get() == surface) {
             window = w;
             break;
         }
@@ -4106,7 +4106,7 @@ static PHLMONITOR monitorAt(const Vector2D& point) {
 // cover, else the one it was told it is on; otherwise the canvas under the pointer if it shows the
 // window, else the one showing most of it.
 static PHLMONITOR canvasScreenOf(const PHLWINDOW& window) {
-    if (window->m_isX11) {
+    if (window->backend().isX11()) {
         if (const auto* SYNC = x11Sync(window, false); SYNC && SYNC->valid) {
             if (const auto COVERS = SYNC->covers.lock(); COVERS && canvasOf(scrollOverviewForMonitor(COVERS)))
                 return COVERS;
@@ -4545,13 +4545,13 @@ std::string canvasStateJson() {
     for (const auto& entry : g_canvasFullscreen) {
         const auto WINDOW  = entry.window.lock();
         const auto MONITOR = entry.monitor.lock();
-        fullscreen += std::format("{}{{\"window\": {}, \"monitor\": {}}}", fullscreen.empty() ? "" : ", ", jsonString(WINDOW ? WINDOW->m_title : ""), jsonString(MONITOR ? MONITOR->m_name : ""));
+        fullscreen += std::format("{}{{\"window\": {}, \"monitor\": {}}}", fullscreen.empty() ? "" : ", ", jsonString(WINDOW ? WINDOW->metadata().title() : ""), jsonString(MONITOR ? MONITOR->m_name : ""));
     }
     const auto* LEADER   = g_linkedLeader;
     const auto  SELECTED = SpatialOverview::Navigator::isOpen() ? SpatialOverview::Navigator::selectedWindow() : PHLWINDOW{};
     return std::format("{{\"linked\": {}, \"leader\": {}, \"screens\": [{}], \"workspaces\": [{}], \"fullscreen\": [{}], \"filled\": [{}], \"selected\": {}, \"query\": {}}}\n",
                        ScrollOverview::Config::getCanvasLinkedScreens() ? "true" : "false", jsonString(LEADER && LEADER->canvasMonitor() ? LEADER->canvasMonitor()->m_name : ""),
-                       screens, canvasWorkspaceStateJson(), fullscreen, canvasFillJson(), jsonString(SELECTED ? SELECTED->m_title : ""),
+                       screens, canvasWorkspaceStateJson(), fullscreen, canvasFillJson(), jsonString(SELECTED ? SELECTED->metadata().title() : ""),
                        jsonString(SpatialOverview::Navigator::isOpen() ? SpatialOverview::Navigator::state().query : ""));
 }
 
@@ -4572,7 +4572,7 @@ static std::string canvasFillJson() {
     std::string out;
     for (const auto& [_, entry] : g_canvasFill) {
         if (const auto WINDOW = entry.window.lock())
-            out += (out.empty() ? "" : ", ") + jsonString(WINDOW->m_title);
+            out += (out.empty() ? "" : ", ") + jsonString(WINDOW->metadata().title());
     }
     return out;
 }
@@ -4589,10 +4589,10 @@ bool canvasTogglePin(PHLWINDOW window) {
 
     window            = getOverviewWindowToShow(window);
     const auto TARGET = validMapped(window) ? window->layoutTarget() : nullptr;
-    if (!TARGET || !window->m_isFloating || Fullscreen::controller()->isFullscreen(window) || (window->m_workspace && window->m_workspace->m_isSpecialWorkspace))
+    if (!TARGET || !window->isFloating() || Fullscreen::controller()->isFullscreen(window) || (window->m_workspace && window->m_workspace->m_isSpecialWorkspace))
         return true;
 
-    if (window->m_pinned) {
+    if (windowPinned(window)) {
         const auto BOX     = CBox{window->m_realPosition->goal(), window->m_realSize->goal()};
         auto*      canvas  = canvasOf(scrollOverviewForMonitor(monitorAt(BOX.middle())));
         if (canvas && !canvas->canvasWindowInWorkspace(window))
@@ -4639,7 +4639,7 @@ static CBox canvasFillArea(const PHLMONITOR& monitor, const PHLWINDOW& window) {
         box.width -= GAPS->m_left + GAPS->m_right;
         box.height -= GAPS->m_top + GAPS->m_bottom;
     }
-    const double BORDER = window ? window->getRealBorderSize() : 0;
+    const double BORDER = window ? window->presentation().borderSize() : 0;
     return CBox{box.x + BORDER, box.y + BORDER, box.width - 2 * BORDER, box.height - 2 * BORDER};
 }
 
@@ -4652,7 +4652,7 @@ bool canvasToggleFill(PHLWINDOW window) {
 
     window            = getOverviewWindowToShow(window);
     const auto TARGET = window ? window->layoutTarget() : nullptr;
-    if (!shouldShowOverviewWindow(window) || !TARGET || !TARGET->floating() || window->m_pinned || Fullscreen::controller()->isFullscreen(window))
+    if (!shouldShowOverviewWindow(window) || !TARGET || !TARGET->floating() || windowPinned(window) || Fullscreen::controller()->isFullscreen(window))
         return true;
 
     const auto MONITOR = canvasScreenOf(window);
@@ -4789,7 +4789,7 @@ PHLWINDOW CScrollOverview::canvasDesktopWindowAtPoint(const Vector2D& point, CBo
     // the popup surface from the window-relative point.
     for (auto it = WINDOWS.rbegin(); it != WINDOWS.rend(); ++it) {
         const auto WINDOW = getOverviewWindowToShow(*it);
-        if (!shouldShowOverviewWindow(WINDOW) || WINDOW->m_pinned || WINDOW->m_isX11 || !WINDOW->m_popupHead)
+        if (!shouldShowOverviewWindow(WINDOW) || windowPinned(WINDOW) || WINDOW->backend().isX11() || !WINDOW->m_popupHead)
             continue;
         const auto BOX = canvasDesktopWindowBox(WINDOW);
         if (BOX.empty())
@@ -4807,7 +4807,7 @@ PHLWINDOW CScrollOverview::canvasDesktopWindowAtPoint(const Vector2D& point, CBo
     std::unordered_set<const void*> visited;
     for (auto it = WINDOWS.rbegin(); it != WINDOWS.rend(); ++it) {
         const auto WINDOW = getOverviewWindowToShow(*it);
-        if (!shouldShowOverviewWindow(WINDOW) || !canvasWindowInWorkspace(WINDOW) || WINDOW->m_pinned || !visited.emplace(WINDOW.get()).second)
+        if (!shouldShowOverviewWindow(WINDOW) || !canvasWindowInWorkspace(WINDOW) || windowPinned(WINDOW) || !visited.emplace(WINDOW.get()).second)
             continue;
 
         const auto BOX = canvasDesktopWindowBox(WINDOW);
@@ -4917,27 +4917,27 @@ bool CScrollOverview::manageCanvasWindow(PHLWINDOW window, bool placeNew) {
 
     window = getOverviewWindowToShow(window);
     auto TARGET = window ? window->layoutTarget() : nullptr;
-    if (!shouldShowOverviewWindow(window) || !canvasWindowInWorkspace(window) || !TARGET || window->m_pinned || isScreensaverWindow(window))
+    if (!shouldShowOverviewWindow(window) || !canvasWindowInWorkspace(window) || !TARGET || windowPinned(window) || isScreensaverWindow(window))
         return false;
 
     if (window->m_workspace && window->m_workspace->m_isSpecialWorkspace) return false;
     if (workspaceBoundCanvas) {
         // Source and destination listeners may run in either order. Release
         // the old native owner before capturing the destination's native state.
-        const auto IT = g_canvasNativeLayout.find(window->m_stableID);
+        const auto IT = g_canvasNativeLayout.find(window->metadata().stableID());
         if (IT != g_canvasNativeLayout.end() && IT->second.workspace.lock() != startedOn) {
             const auto SAVED = IT->second;
             g_canvasNativeLayout.erase(IT);
             g_canvasRestoring = true;
             auto restoreGuard = Hyprutils::Utils::CScopeGuard([] { g_canvasRestoring = false; });
-            restoreCanvasNativeWindow(window->m_stableID, SAVED, window, false);
+            restoreCanvasNativeWindow(window->metadata().stableID(), SAVED, window, false);
             TARGET = window->layoutTarget();
             if (!TARGET)
                 return false;
         }
     }
-    if (!g_canvasNativeLayout.contains(window->m_stableID))
-        g_canvasNativeLayout.emplace(window->m_stableID, saveCanvasWindow(window));
+    if (!g_canvasNativeLayout.contains(window->metadata().stableID()))
+        g_canvasNativeLayout.emplace(window->metadata().stableID(), saveCanvasWindow(window));
     const auto MONITOR = pMonitor.lock();
 
     if (ScrollOverview::Config::getCanvasAutoFloat() && !SpatialOverview::Experiments::on(ECanvasExperiment::Areas) && !TARGET->floating()) {
@@ -4952,7 +4952,7 @@ bool CScrollOverview::manageCanvasWindow(PHLWINDOW window, bool placeNew) {
     if (!g_canvasManagedTargets.emplace(TARGET.get()).second)
         return true;
 
-    if (const auto saved = g_canvasSpatialLayout.find(window->m_stableID); saved != g_canvasSpatialLayout.end()) {
+    if (const auto saved = g_canvasSpatialLayout.find(window->metadata().stableID()); saved != g_canvasSpatialLayout.end()) {
         if (!workspaceBoundCanvas || saved->second.workspace.lock() == startedOn) {
             TARGET->rememberFloatingSize(saved->second.box.size());
             TARGET->setPositionGlobal(saved->second.box);
@@ -5052,7 +5052,7 @@ bool CScrollOverview::arrangeCanvasWindows() {
 
     for (const auto& windowRef : windows) {
         auto WINDOW = getOverviewWindowToShow(windowRef);
-        if (!shouldShowOverviewWindow(WINDOW) || !canvasWindowInWorkspace(WINDOW) || WINDOW->m_pinned || isScreensaverWindow(WINDOW) || !visited.emplace(WINDOW.get()).second)
+        if (!shouldShowOverviewWindow(WINDOW) || !canvasWindowInWorkspace(WINDOW) || windowPinned(WINDOW) || isScreensaverWindow(WINDOW) || !visited.emplace(WINDOW.get()).second)
             continue;
 
         manageCanvasWindow(WINDOW, false);
@@ -5317,7 +5317,7 @@ void CScrollOverview::forwardCanvasPointerMotion(uint32_t timeMs) {
 
     // The X server has to agree about where this window is on the monitor
     // the pointer is using it on.
-    if (WINDOW && WINDOW->m_isX11)
+    if (WINDOW && WINDOW->backend().isX11())
         canvasClaimX11Window(WINDOW);
 
     if (WINDOW && WINDOW->wlSurface() && WINDOW->wlSurface()->resource()) {
@@ -5325,7 +5325,7 @@ void CScrollOverview::forwardCanvasPointerMotion(uint32_t timeMs) {
         // windowSurfaceAt is Wayland-only and aborts for XWayland windows.
         // X11 clients expose one surface; convert the canvas-local position to
         // its native coordinates, including Hyprland's force-zero scaling.
-        if (WINDOW->m_isX11) {
+        if (WINDOW->backend().isX11()) {
             SURFACE      = WINDOW->wlSurface()->resource();
             SURFACELOCAL = WINDOWLOCAL * WINDOW->m_X11SurfaceScaledBy;
         } else if (canvasForwardedPointerButtons.empty())
@@ -5738,7 +5738,7 @@ void CScrollOverview::refreshDragOriginalOverviewBoxes() {
 CBox CScrollOverview::resizedWindowBox() const {
     const auto WINDOW  = getOverviewWindowToShow(resizeActiveWindow.lock());
     const auto MONITOR = pMonitor.lock();
-    if (!WINDOW || !MONITOR || resizeWorkspaceIdx >= images.size() || !WINDOW->m_isFloating)
+    if (!WINDOW || !MONITOR || resizeWorkspaceIdx >= images.size() || !WINDOW->isFloating())
         return {};
 
     const float SCALEFACTOR = std::max(scale->value(), 0.01F) * std::max(MONITOR->m_scale, 0.01F);
@@ -5761,7 +5761,7 @@ CBox CScrollOverview::resizedWindowBox() const {
 
     const auto WORKSPACEOFFSET = workspaceOverviewOffset(resizeWorkspaceIdx, activeWorkspaceIndex(), getWorkspaceRenderedPitch(MONITOR, scale->value(), layout));
     const auto WORKSPACEBOX = getOverviewWorkspaceBox(MONITOR, scale->value(), viewOffset->value(), WORKSPACEOFFSET, layout);
-    const auto BORDERMARGIN = WINDOW->getRealBorderSize() * MONITOR->m_scale * scale->value();
+    const auto BORDERMARGIN = WINDOW->presentation().borderSize() * MONITOR->m_scale * scale->value();
 
     if (ScrollOverview::Config::getCanvasEnabled() && ScrollOverview::Config::getCanvasAllowWindowOverflow())
         return box;
@@ -5859,7 +5859,7 @@ void CScrollOverview::beginWindowDrag(PHLWINDOW window) {
     dragOriginalTapeTranslation  = Vector2D{};
     dragOriginalWorkspace         = WINDOW->m_workspace;
     dragOriginalBox               = TARGET->position();
-    dragOriginalVisualBox         = WINDOW->m_group ? TARGET->position() : WINDOW->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
+    dragOriginalVisualBox         = WINDOW->grouping().group() ? TARGET->position() : WINDOW->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
     dragOriginalOverviewBox       = CBox{};
     dragOriginalOverviewHitbox    = CBox{};
     dragActiveWindow              = WINDOW;
@@ -5933,7 +5933,7 @@ void CScrollOverview::updateWindowResize() {
 
     TARGET->damageEntire();
 
-    if (WINDOW->m_isFloating) {
+    if (WINDOW->isFloating()) {
         const auto RESIZEDBOX  = resizedWindowBox();
         const auto SCALEFACTOR = std::max(scale->value(), 0.01F) * std::max(MONITOR->m_scale, 0.01F);
         const auto GLOBALBOX   = CBox{overviewPointToGlobal(resizeWorkspaceIdx, RESIZEDBOX.pos()), RESIZEDBOX.size() * (1.F / SCALEFACTOR)};
@@ -6119,7 +6119,7 @@ bool CScrollOverview::commitCanvasViewport(size_t workspaceIdx) {
     std::unordered_set<const void*> movedTargets;
     for (const auto& windowRef : Desktop::windowState()->windows()) {
         const auto WINDOW = windowRef;
-        if (!WINDOW || WINDOW->m_workspace != WORKSPACE || !WINDOW->m_isFloating || WINDOW->m_pinned)
+        if (!WINDOW || WINDOW->m_workspace != WORKSPACE || !WINDOW->isFloating() || windowPinned(WINDOW))
             continue;
 
         const auto TARGET = WINDOW->layoutTarget();
@@ -6159,7 +6159,7 @@ void CScrollOverview::focusMostVisibleScrollingWindow(const PHLWORKSPACE& worksp
         WORKSPACEBOX.translate(MONITOR->m_position);
 
     const auto preferredWindow = getOverviewWindowToShow(scrollingPanInitialWindow.lock());
-    if (shouldShowOverviewWindow(preferredWindow) && preferredWindow->m_workspace == workspace && !preferredWindow->m_isFloating && preferredWindow->layoutTarget()) {
+    if (shouldShowOverviewWindow(preferredWindow) && preferredWindow->m_workspace == workspace && !preferredWindow->isFloating() && preferredWindow->layoutTarget()) {
         const auto WINDOWBOX   = preferredWindow->layoutTarget()->position();
         const auto AREA        = overviewBoxArea(WINDOWBOX);
         const auto VISIBLEAREA = overviewBoxIntersectionArea(WINDOWBOX, WORKSPACEBOX);
@@ -6173,7 +6173,7 @@ void CScrollOverview::focusMostVisibleScrollingWindow(const PHLWORKSPACE& worksp
 
     for (const auto& windowRef : Desktop::windowState()->windows()) {
         const auto WINDOW = getOverviewWindowToShow(windowRef);
-        if (!shouldShowOverviewWindow(WINDOW) || WINDOW->m_workspace != workspace || WINDOW->m_isFloating || !WINDOW->layoutTarget())
+        if (!shouldShowOverviewWindow(WINDOW) || WINDOW->m_workspace != workspace || WINDOW->isFloating() || !WINDOW->layoutTarget())
             continue;
 
         const auto WINDOWBOX = WINDOW->layoutTarget()->position();
@@ -6222,7 +6222,7 @@ bool CScrollOverview::moveScrollingColumnSelection(bool next) {
     if (!ALGO || !ALGO->m_scrollingData || ALGO->m_scrollingData->columns.empty())
         return false;
 
-    if (!closeOnWindow || closeOnWindow->m_workspace != WORKSPACEIMAGE->pWorkspace || !shouldShowOverviewWindow(closeOnWindow.lock()) || closeOnWindow->m_isFloating)
+    if (!closeOnWindow || closeOnWindow->m_workspace != WORKSPACEIMAGE->pWorkspace || !shouldShowOverviewWindow(closeOnWindow.lock()) || closeOnWindow->isFloating())
         syncSelectionToViewport();
 
     const auto CURRENT = getOverviewWindowToShow(closeOnWindow.lock());
@@ -6241,7 +6241,7 @@ bool CScrollOverview::moveScrollingColumnSelection(bool next) {
 
             for (const auto& windowRef : WORKSPACEIMAGE->windows) {
                 const auto WINDOW = getOverviewWindowToShow(windowRef.lock());
-                if (shouldShowOverviewWindow(WINDOW) && !WINDOW->m_isFloating && WINDOW->layoutTarget() == targetData->target && WINDOW->m_workspace == WORKSPACEIMAGE->pWorkspace)
+                if (shouldShowOverviewWindow(WINDOW) && !WINDOW->isFloating() && WINDOW->layoutTarget() == targetData->target && WINDOW->m_workspace == WORKSPACEIMAGE->pWorkspace)
                     return WINDOW;
             }
         }
@@ -6304,7 +6304,7 @@ bool CScrollOverview::moveScrollingStackSelection(bool next) {
     if (!ALGO || !ALGO->m_scrollingData || ALGO->m_scrollingData->columns.empty())
         return false;
 
-    if (!closeOnWindow || closeOnWindow->m_workspace != WORKSPACEIMAGE->pWorkspace || !shouldShowOverviewWindow(closeOnWindow.lock()) || closeOnWindow->m_isFloating)
+    if (!closeOnWindow || closeOnWindow->m_workspace != WORKSPACEIMAGE->pWorkspace || !shouldShowOverviewWindow(closeOnWindow.lock()) || closeOnWindow->isFloating())
         syncSelectionToViewport();
 
     const auto CURRENT = getOverviewWindowToShow(closeOnWindow.lock());
@@ -6327,7 +6327,7 @@ bool CScrollOverview::moveScrollingStackSelection(bool next) {
 
     for (const auto& windowRef : WORKSPACEIMAGE->windows) {
         const auto WINDOW = getOverviewWindowToShow(windowRef.lock());
-        if (shouldShowOverviewWindow(WINDOW) && !WINDOW->m_isFloating && WINDOW->layoutTarget() == TARGETDATA->target && WINDOW->m_workspace == WORKSPACEIMAGE->pWorkspace) {
+        if (shouldShowOverviewWindow(WINDOW) && !WINDOW->isFloating() && WINDOW->layoutTarget() == TARGETDATA->target && WINDOW->m_workspace == WORKSPACEIMAGE->pWorkspace) {
             closeOnWindow = WINDOW;
             rememberSelection(WINDOW);
             syncFocusedSelection();
@@ -6386,7 +6386,7 @@ void CScrollOverview::endWindowDrag() {
     }
 
     const auto SOURCEFULLSCREENWINDOW = ORIGINALWORKSPACE ? getOverviewWindowToShow(Fullscreen::controller()->getFullscreenWindow(ORIGINALWORKSPACE)) : PHLWINDOW{};
-    const bool RESTORESOURCEFULLSCREENFOCUS = WINDOW && WINDOW->m_isFloating && MOVEWORKSPACE && shouldShowOverviewWindow(SOURCEFULLSCREENWINDOW) &&
+    const bool RESTORESOURCEFULLSCREENFOCUS = WINDOW && WINDOW->isFloating() && MOVEWORKSPACE && shouldShowOverviewWindow(SOURCEFULLSCREENWINDOW) &&
         SOURCEFULLSCREENWINDOW != WINDOW && SOURCEFULLSCREENWINDOW->m_workspace == ORIGINALWORKSPACE && Fullscreen::controller()->isFullscreen(SOURCEFULLSCREENWINDOW);
 
     const bool DROPSIDEHORIZONTAL = dropOverview->layout != ScrollOverview::Config::ELayout::HORIZONTAL || DROPSCROLLINGPRIMARYHORIZONTAL;
@@ -6496,7 +6496,7 @@ void CScrollOverview::endWindowDrag() {
             if (FREECANVAS)
                 GLOBALBOX = dropOverview->snapCanvasWindowBox(GLOBALBOX, DROPMONITOR);
             if (dropWorkspaceFullyVisible && !FREECANVAS)
-                GLOBALBOX = clampBoxToWorkspace(GLOBALBOX, DROPWORKSPACE, DROPMONITOR, WINDOW->getRealBorderSize());
+                GLOBALBOX = clampBoxToWorkspace(GLOBALBOX, DROPWORKSPACE, DROPMONITOR, WINDOW->presentation().borderSize());
 
             TARGET->setPositionGlobal(GLOBALBOX);
             TARGET->warpPositionSize();
@@ -6514,7 +6514,7 @@ void CScrollOverview::endWindowDrag() {
         const auto WORKSPACE  = workspaceIdx < images.size() && images[workspaceIdx] ? images[workspaceIdx]->pWorkspace : WINDOW->m_workspace;
 
         if (!ScrollOverview::Config::getCanvasEnabled() || !ScrollOverview::Config::getCanvasAllowWindowOverflow())
-            GLOBALBOX = clampBoxToWorkspace(GLOBALBOX, WORKSPACE, MONITOR, WINDOW->getRealBorderSize());
+            GLOBALBOX = clampBoxToWorkspace(GLOBALBOX, WORKSPACE, MONITOR, WINDOW->presentation().borderSize());
         else
             GLOBALBOX = snapCanvasWindowBox(GLOBALBOX, MONITOR);
 
@@ -6562,7 +6562,7 @@ void CScrollOverview::endWindowResize() {
     const auto TARGET  = WINDOW ? WINDOW->layoutTarget() : nullptr;
     const auto MONITOR = pMonitor.lock();
 
-    if (WINDOW && TARGET && WINDOW->m_isFloating && resizeWorkspaceIdx < images.size()) {
+    if (WINDOW && TARGET && WINDOW->isFloating() && resizeWorkspaceIdx < images.size()) {
         const auto RESIZEDBOX  = resizedWindowBox();
         const auto SCALEFACTOR = std::max(scale->value(), 0.01F) * std::max(MONITOR ? MONITOR->m_scale : 1.F, 0.01F);
         auto       GLOBALBOX   = CBox{overviewPointToGlobal(resizeWorkspaceIdx, RESIZEDBOX.pos()), RESIZEDBOX.size() * (1.F / SCALEFACTOR)};
@@ -6957,7 +6957,7 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
             // A window's Hyprland monitor is only its surface owner in desktop
             // canvas mode. It must not partition the shared spatial world or
             // an adjacent window can become unreachable from this camera.
-            if (!shouldShowOverviewWindow(WINDOW) || !canvasWindowInWorkspace(WINDOW) || WINDOW->m_pinned || WINDOW == CURRENT || !visited.emplace(WINDOW.get()).second)
+            if (!shouldShowOverviewWindow(WINDOW) || !canvasWindowInWorkspace(WINDOW) || windowPinned(WINDOW) || WINDOW == CURRENT || !visited.emplace(WINDOW.get()).second)
                 continue;
             // While searching, arrows move between the windows that match.
             if (canvasNavigationActive && !SpatialOverview::Navigator::isMatch(WINDOW))
@@ -7030,9 +7030,9 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
     if (!WORKSPACEIMAGE || !WORKSPACEIMAGE->pWorkspace)
         shouldMoveWorkspace = true;
 
-    if (!shouldMoveWorkspace && (!closeOnWindow || closeOnWindow->m_workspace != WORKSPACEIMAGE->pWorkspace || !shouldShowOverviewWindow(closeOnWindow.lock()) || closeOnWindow->m_isFloating)) {
+    if (!shouldMoveWorkspace && (!closeOnWindow || closeOnWindow->m_workspace != WORKSPACEIMAGE->pWorkspace || !shouldShowOverviewWindow(closeOnWindow.lock()) || closeOnWindow->isFloating())) {
         syncSelectionToViewport();
-        if (!closeOnWindow || closeOnWindow->m_workspace != WORKSPACEIMAGE->pWorkspace || !shouldShowOverviewWindow(closeOnWindow.lock()) || closeOnWindow->m_isFloating)
+        if (!closeOnWindow || closeOnWindow->m_workspace != WORKSPACEIMAGE->pWorkspace || !shouldShowOverviewWindow(closeOnWindow.lock()) || closeOnWindow->isFloating())
             shouldMoveWorkspace = true;
     }
 
@@ -7070,7 +7070,7 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
 
     for (const auto& windowRef : shouldMoveWorkspace ? std::vector<PHLWINDOWREF>{} : WORKSPACEIMAGE->windows) {
         const auto WINDOW = getOverviewWindowToShow(windowRef.lock());
-        if (!shouldShowOverviewWindow(WINDOW) || WINDOW == CURRENT || WINDOW->m_isFloating)
+        if (!shouldShowOverviewWindow(WINDOW) || WINDOW == CURRENT || WINDOW->isFloating())
             continue;
 
         if (WINDOW->m_workspace != WORKSPACEIMAGE->pWorkspace || WINDOW->m_monitor != pMonitor)
@@ -7201,7 +7201,7 @@ void CScrollOverview::forceWindowSurfaceVisibility(PHLWINDOW window) {
 
     window->wlSurface()->resource()->breadthfirst([this](SP<CWLSurfaceResource> surface, const Vector2D&, void*) { forceSurfaceVisibility(surface); }, nullptr);
 
-    if (window->m_isX11 || !window->m_popupHead)
+    if (window->backend().isX11() || !window->m_popupHead)
         return;
 
     window->m_popupHead->breadthfirst([this](WP<Desktop::View::CPopup> popup, void*) {
@@ -7292,9 +7292,9 @@ void CScrollOverview::restoreForcedWindowVisibility() {
         WINDOW->updateFullscreenInputState();
         *WINDOW->alpha(FULLSCREENALPHA) = WINDOW->isBlockedByFullscreen() ? 0.F : 1.F;
 
-        if (WINDOW->m_group) {
-            if (std::ranges::find(groupsToRefresh, WINDOW->m_group) == groupsToRefresh.end())
-                groupsToRefresh.emplace_back(WINDOW->m_group);
+        if (WINDOW->grouping().group()) {
+            if (std::ranges::find(groupsToRefresh, WINDOW->grouping().group()) == groupsToRefresh.end())
+                groupsToRefresh.emplace_back(WINDOW->grouping().group());
             continue;
         }
 
@@ -7650,7 +7650,7 @@ void CScrollOverview::renderWorkspaceLive(Render::CRenderContext& ctx, PHLMONITO
             .anchor                = ANCHOR,
             .renderScale           = renderScale,
             .workspaceFullyVisible = overviewBoxFullyVisibleOnMonitor(WORKSPACEBOX, monitor),
-            .floating              = DRAGGED->m_isFloating,
+            .floating              = DRAGGED->isFloating(),
             .layout                = layout,
         });
     };
@@ -7660,7 +7660,7 @@ void CScrollOverview::renderWorkspaceLive(Render::CRenderContext& ctx, PHLMONITO
         OverviewRender::flushPass(ctx, monitor);
         for (const auto& windowRef : workspaceImage->windows) {
             const auto window = getOverviewWindowToShow(windowRef.lock());
-            if (!shouldShowOverviewWindow(window) || !window->m_isFloating || window == fullscreenWindow)
+            if (!shouldShowOverviewWindow(window) || !window->isFloating() || window == fullscreenWindow)
                 continue;
 
             renderOverviewWindow(ctx, window);
@@ -7672,7 +7672,7 @@ void CScrollOverview::renderWorkspaceLive(Render::CRenderContext& ctx, PHLMONITO
     const auto renderWindowsByState = [&](bool floating) {
         for (const auto& windowRef : workspaceImage->windows) {
             const auto window = getOverviewWindowToShow(windowRef.lock());
-            if (!window || window->m_isFloating != floating)
+            if (!window || window->isFloating() != floating)
                 continue;
 
             renderOverviewWindow(ctx, window);
@@ -7886,7 +7886,7 @@ std::optional<CBox> CScrollOverview::canvasMinimapWorldBounds(PHLMONITOR monitor
     std::unordered_set<const void*> visited;
     for (const auto& windowRef : Desktop::windowState()->windows()) {
         const auto WINDOW = getOverviewWindowToShow(windowRef);
-        if (!shouldShowOverviewWindow(WINDOW) || !canvasWindowInWorkspace(WINDOW) || WINDOW->m_pinned || !visited.emplace(WINDOW.get()).second)
+        if (!shouldShowOverviewWindow(WINDOW) || !canvasWindowInWorkspace(WINDOW) || windowPinned(WINDOW) || !visited.emplace(WINDOW.get()).second)
             continue;
         includeWorldBox(WINDOW->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT));
     }
@@ -7990,7 +7990,7 @@ void CScrollOverview::renderCanvasMinimap(Render::CRenderContext& ctx, PHLMONITO
     std::unordered_set<const void*> visited;
     for (const auto& windowRef : Desktop::windowState()->windows()) {
         const auto WINDOW = getOverviewWindowToShow(windowRef);
-        if (!shouldShowOverviewWindow(WINDOW) || !canvasWindowInWorkspace(WINDOW) || WINDOW->m_pinned || !visited.emplace(WINDOW.get()).second)
+        if (!shouldShowOverviewWindow(WINDOW) || !canvasWindowInWorkspace(WINDOW) || windowPinned(WINDOW) || !visited.emplace(WINDOW.get()).second)
             continue;
 
         if (WINDOW == FOCUSED)
@@ -8016,7 +8016,7 @@ void CScrollOverview::renderCanvasMinimap(Render::CRenderContext& ctx, PHLMONITO
     visited.clear();
     for (const auto& windowRef : Desktop::windowState()->windows()) {
         const auto WINDOW = getOverviewWindowToShow(windowRef);
-        if (!shouldShowOverviewWindow(WINDOW) || !canvasWindowInWorkspace(WINDOW) || WINDOW->m_pinned || !visited.emplace(WINDOW.get()).second)
+        if (!shouldShowOverviewWindow(WINDOW) || !canvasWindowInWorkspace(WINDOW) || windowPinned(WINDOW) || !visited.emplace(WINDOW.get()).second)
             continue;
 
         auto color = WINDOW == FOCUSED ? activeColor : inactiveColor;
@@ -8175,7 +8175,7 @@ void CScrollOverview::renderCanvasDesktopScene(Render::CRenderContext& ctx, PHLM
     const auto renderPass = [&](bool floating) {
         for (const auto& windowRef : Desktop::windowState()->windows()) {
             const auto WINDOW = getOverviewWindowToShow(windowRef);
-            if (!shouldShowOverviewWindow(WINDOW) || canvasScreenFixedWindow(WINDOW) || WINDOW->m_isFloating != floating || !rendered.emplace(WINDOW.get()).second)
+            if (!shouldShowOverviewWindow(WINDOW) || canvasScreenFixedWindow(WINDOW) || WINDOW->isFloating() != floating || !rendered.emplace(WINDOW.get()).second)
                 continue;
             if (dragActiveWindow && WINDOW == getOverviewWindowToShow(dragActiveWindow.lock()))
                 continue;
@@ -8675,7 +8675,7 @@ bool CScrollOverview::shouldSuppressRenderDamage() const {
 
                 for (const auto& windowRef : workspaceImage->windows) {
                     const auto window = getOverviewWindowToShow(windowRef.lock());
-                    if (window && window->m_isFloating && isVisibleAnimatedWindow(window, WORKSPACEOFFSET))
+                    if (window && window->isFloating() && isVisibleAnimatedWindow(window, WORKSPACEOFFSET))
                         return false;
                 }
 
@@ -8760,7 +8760,7 @@ void CScrollOverview::sendOverviewFrameCallbacks(const Time::steady_tp& now) {
     if (isCanvasDesktop()) {
         for (const auto& windowRef : Desktop::windowState()->windows()) {
             const auto window = getOverviewWindowToShow(windowRef);
-            if (!shouldShowOverviewWindow(window) || window->m_pinned)
+            if (!shouldShowOverviewWindow(window) || windowPinned(window))
                 continue;
             const auto* OWNER = canvasFrameOwner(window);
             if (OWNER != this && window != DRAGGED) {
@@ -8795,7 +8795,7 @@ void CScrollOverview::sendOverviewFrameCallbacks(const Time::steady_tp& now) {
                     frameWindow(fullscreenWindow, WORKSPACEOFFSET, REALTIME);
                     for (const auto& windowRef : workspaceImage->windows) {
                         const auto window = getOverviewWindowToShow(windowRef.lock());
-                        if (window && window->m_isFloating)
+                        if (window && window->isFloating())
                             frameWindow(window, WORKSPACEOFFSET, REALTIME);
                     }
                     continue;
@@ -8868,7 +8868,7 @@ bool CScrollOverview::shouldAllowSurfaceFrame(SP<CWLSurfaceResource> surface, co
     // The canvas desktop: whatever a canvas draws gets its frames at that
     // monitor's refresh (see sendOverviewFrameCallbacks). Windows no canvas
     // shows only get the throttled ones.
-    if (isCanvasDesktop() && shouldShowOverviewWindow(window) && !window->m_pinned) {
+    if (isCanvasDesktop() && shouldShowOverviewWindow(window) && !windowPinned(window)) {
         if (canvasFrameOwner(window))
             return true;
         return std::ranges::any_of(scrollOverviews(), [](const auto& overview) {
@@ -8902,7 +8902,7 @@ bool CScrollOverview::shouldAllowSurfaceFrame(SP<CWLSurfaceResource> surface, co
 
         if (!isWorkspaceScrolling(workspaceImage->pWorkspace)) {
             const auto fullscreenWindow = getOverviewWindowToShow(Fullscreen::controller()->getFullscreenWindow(workspaceImage->pWorkspace));
-            if (shouldShowOverviewWindow(fullscreenWindow) && fullscreenWindow->m_workspace == workspaceImage->pWorkspace && fullscreenWindow != window && !window->m_isFloating)
+            if (shouldShowOverviewWindow(fullscreenWindow) && fullscreenWindow->m_workspace == workspaceImage->pWorkspace && fullscreenWindow != window && !window->isFloating())
                 return false;
         }
 
@@ -8986,7 +8986,7 @@ bool CScrollOverview::shouldHandleSurfaceDamage(SP<CWLSurfaceResource> surface) 
     // asked for again at the flip, which the frame pending flag lets
     // through). This runs for the first canvas asked (the caller stops at the
     // first false), so it does the work for all of them.
-    if (isCanvasDesktop() && shouldShowOverviewWindow(window) && !window->m_pinned && canvasFrameOwner(window)) {
+    if (isCanvasDesktop() && shouldShowOverviewWindow(window) && !windowPinned(window) && canvasFrameOwner(window)) {
         for (const auto& overview : scrollOverviews()) {
             if (auto* canvas = canvasOf(overview); canvas && canvas->canvasDrawsWindow(window)) {
                 canvas->selectedWorkspaceFramePending = true;
@@ -9024,7 +9024,7 @@ bool CScrollOverview::shouldHandleSurfaceDamage(SP<CWLSurfaceResource> surface) 
 
         if (!isWorkspaceScrolling(workspaceImage->pWorkspace)) {
             const auto fullscreenWindow = getOverviewWindowToShow(Fullscreen::controller()->getFullscreenWindow(workspaceImage->pWorkspace));
-            if (shouldShowOverviewWindow(fullscreenWindow) && fullscreenWindow->m_workspace == workspaceImage->pWorkspace && fullscreenWindow != window && !window->m_isFloating)
+            if (shouldShowOverviewWindow(fullscreenWindow) && fullscreenWindow->m_workspace == workspaceImage->pWorkspace && fullscreenWindow != window && !window->isFloating())
                 return false;
         }
 
@@ -9261,11 +9261,11 @@ void CScrollOverview::closeForWorkspaceSwitch() {
     if (isCanvasDesktop() && MONITOR) {
         for (const auto& windowRef : Desktop::windowState()->windows()) {
             const auto WINDOW = getOverviewWindowToShow(windowRef);
-            if (!shouldShowOverviewWindow(WINDOW) || !canvasWindowInWorkspace(WINDOW) || WINDOW->m_pinned || !WINDOW->layoutTarget())
+            if (!shouldShowOverviewWindow(WINDOW) || !canvasWindowInWorkspace(WINDOW) || windowPinned(WINDOW) || !WINDOW->layoutTarget())
                 continue;
 
             const auto TARGET = WINDOW->layoutTarget();
-            g_canvasSpatialLayout[WINDOW->m_stableID] = {.workspace = startedOn, .box = TARGET->position()};
+            g_canvasSpatialLayout[WINDOW->metadata().stableID()] = {.workspace = startedOn, .box = TARGET->position()};
             g_canvasManagedTargets.erase(TARGET.get());
         }
     }
@@ -9486,7 +9486,7 @@ void CScrollOverview::syncCanvasWindowScreens() {
     const auto SCREEN = MONITOR->logicalBox();
     for (const auto& windowRef : Desktop::windowState()->windows()) {
         const auto WINDOW = getOverviewWindowToShow(windowRef);
-        if (!shouldShowOverviewWindow(WINDOW) || WINDOW->m_pinned || WINDOW->m_workspace == MONITOR->m_activeWorkspace || Fullscreen::controller()->isFullscreen(WINDOW) ||
+        if (!shouldShowOverviewWindow(WINDOW) || windowPinned(WINDOW) || WINDOW->m_workspace == MONITOR->m_activeWorkspace || Fullscreen::controller()->isFullscreen(WINDOW) ||
             !WINDOW->layoutTarget() || WINDOW->m_realPosition->isBeingAnimated())
             continue;
         const auto BOX  = canvasDrawnGlobalBox(WINDOW);
@@ -10017,11 +10017,11 @@ void CScrollOverview::saveSharedCanvasLayout() {
     std::unordered_set<const void*> visited;
     for (const auto& windowRef : Desktop::windowState()->windows()) {
         const auto WINDOW = getOverviewWindowToShow(windowRef);
-        if (!shouldShowOverviewWindow(WINDOW) || WINDOW->m_pinned || !WINDOW->layoutTarget() || !visited.emplace(WINDOW.get()).second)
+        if (!shouldShowOverviewWindow(WINDOW) || windowPinned(WINDOW) || !WINDOW->layoutTarget() || !visited.emplace(WINDOW.get()).second)
             continue;
         const auto BOX = WINDOW->layoutTarget()->position();
-        std::string klass = WINDOW->m_class;
-        std::string title = WINDOW->m_title;
+        std::string klass = WINDOW->metadata().appID();
+        std::string title = WINDOW->metadata().title();
         std::ranges::replace(klass, '\t', ' ');
         std::ranges::replace(title, '\t', ' ');
         std::ranges::replace(title, '\n', ' ');
@@ -10082,11 +10082,11 @@ void CScrollOverview::loadSharedCanvasLayout() {
             const auto WINDOW = getOverviewWindowToShow(windowRef);
             if (!shouldShowOverviewWindow(WINDOW) || !WINDOW->layoutTarget() || used.contains(WINDOW.get()))
                 continue;
-            if (WINDOW->m_class != saved.klass)
+            if (WINDOW->metadata().appID() != saved.klass)
                 continue;
             ++classCount;
             byClass = WINDOW;
-            if (WINDOW->m_title == saved.title)
+            if (WINDOW->metadata().title() == saved.title)
                 exact = WINDOW;
         }
         const auto MATCH = exact ? exact : (classCount == 1 ? byClass : PHLWINDOW{});
@@ -10139,7 +10139,7 @@ static int saveCanvasMemory(void*) {
         const auto SCOPE = canvas->isWorkspaceBoundCanvas() ? canvasMemoryKey(canvas->workspaceCanvas(), canvas->canvasMonitor(), true) : std::string{};
         for (const auto& windowRef : Desktop::windowState()->windows()) {
             const auto WINDOW = getOverviewWindowToShow(windowRef);
-            if (!shouldShowOverviewWindow(WINDOW) || !canvas->canvasWindowInWorkspace(WINDOW) || WINDOW->m_pinned || !WINDOW->layoutTarget() ||
+            if (!shouldShowOverviewWindow(WINDOW) || !canvas->canvasWindowInWorkspace(WINDOW) || windowPinned(WINDOW) || !WINDOW->layoutTarget() ||
                 !WINDOW->layoutTarget()->floating() || !visited.emplace(WINDOW.get()).second)
                 continue;
             placements.push_back({.window = WINDOW, .box = WINDOW->layoutTarget()->position(), .workspace = SCOPE});
@@ -10402,7 +10402,7 @@ void CScrollOverview::landOnWindow(PHLWINDOW window) {
     if (!isCanvasDesktop() || !MONITOR || closing)
         return;
 
-    if (!shouldShowOverviewWindow(window) || window->m_pinned) {
+    if (!shouldShowOverviewWindow(window) || windowPinned(window)) {
         if (canvasNavigationActive)
             toggleCanvasNavigation();
         return;
@@ -10436,7 +10436,7 @@ void CScrollOverview::landOnWindow(PHLWINDOW window) {
 void CScrollOverview::summonWindow(PHLWINDOW window) {
     const auto MONITOR = pMonitor.lock();
     window             = getOverviewWindowToShow(window);
-    if (!isCanvasDesktop() || !MONITOR || closing || !shouldShowOverviewWindow(window) || !canvasWindowInWorkspace(window) || window->m_pinned || !window->layoutTarget())
+    if (!isCanvasDesktop() || !MONITOR || closing || !shouldShowOverviewWindow(window) || !canvasWindowInWorkspace(window) || windowPinned(window) || !window->layoutTarget())
         return;
 
     checkpointCanvas();
@@ -10521,7 +10521,7 @@ void CScrollOverview::fitAllWindows() {
     std::unordered_set<const void*> visited;
     for (const auto& windowRef : Desktop::windowState()->windows()) {
         const auto WINDOW = getOverviewWindowToShow(windowRef);
-        if (!shouldShowOverviewWindow(WINDOW) || !canvasWindowInWorkspace(WINDOW) || WINDOW->m_pinned || !visited.emplace(WINDOW.get()).second || !SpatialOverview::Navigator::isMatch(WINDOW))
+        if (!shouldShowOverviewWindow(WINDOW) || !canvasWindowInWorkspace(WINDOW) || windowPinned(WINDOW) || !visited.emplace(WINDOW.get()).second || !SpatialOverview::Navigator::isMatch(WINDOW))
             continue;
         const auto BOX = WINDOW->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
         if (!bounds)
@@ -10951,7 +10951,7 @@ bool CScrollOverview::cycleAltTab(int direction) {
     std::unordered_set<const void*> visited;
     for (const auto& windowRef : Desktop::windowState()->windows()) {
         const auto WINDOW = getOverviewWindowToShow(windowRef);
-        if (!shouldShowOverviewWindow(WINDOW) || WINDOW->m_pinned || !visited.emplace(WINDOW.get()).second)
+        if (!shouldShowOverviewWindow(WINDOW) || windowPinned(WINDOW) || !visited.emplace(WINDOW.get()).second)
             continue;
         windows.push_back(WINDOW);
     }
@@ -11277,7 +11277,7 @@ void CScrollOverview::renderNavigatorWindowOverlay(Render::CRenderContext& ctx, 
         return;
 
     const float SCALE    = std::max(monitor->m_scale, 0.01F);
-    const int   ROUNDING = std::max(0, sc<int>(std::round(window->rounding() * SCALE * scale->value())));
+    const int   ROUNDING = std::max(0, sc<int>(std::round(window->presentation().rounding() * SCALE * scale->value())));
     const auto& THEME    = SpatialOverview::Hud::theme();
     const bool  MATCH    = navigatorFrameMatches(window);
     const bool  FOCUSED  = (FROZEN ? navigatorFrame->selected.lock() : getOverviewWindowToShow(Desktop::focusState()->window())) == window;
@@ -11337,7 +11337,7 @@ void CScrollOverview::renderNavigatorReticle(Render::CRenderContext& ctx, PHLMON
 
     const float FADE   = overviewProgress() * workspaceHudOpacity();
     const auto  WINDOW = FROZEN ? navigatorFrame->selected.lock() : getOverviewWindowToShow(Desktop::focusState()->window());
-    if (FADE <= 0.01F || !shouldShowOverviewWindow(WINDOW) || !canvasWindowInWorkspace(WINDOW) || WINDOW->m_pinned || !navigatorFrameMatches(WINDOW))
+    if (FADE <= 0.01F || !shouldShowOverviewWindow(WINDOW) || !canvasWindowInWorkspace(WINDOW) || windowPinned(WINDOW) || !navigatorFrameMatches(WINDOW))
         return;
 
     auto BOX = canvasDesktopWindowBox(WINDOW);
@@ -11349,7 +11349,7 @@ void CScrollOverview::renderNavigatorReticle(Render::CRenderContext& ctx, PHLMON
     // A crisp accent outline standing a few pixels off the window, like the
     // selected card in the palette.
     const float SCALE    = std::max(monitor->m_scale, 0.01F);
-    const int   ROUNDING = std::max(0, sc<int>(std::round(WINDOW->rounding() * SCALE * scale->value())));
+    const int   ROUNDING = std::max(0, sc<int>(std::round(WINDOW->presentation().rounding() * SCALE * scale->value())));
     const float GAP      = std::round(4.F * SCALE);
 
     CBorderPassElement::SBorderData border;
@@ -11469,7 +11469,7 @@ static void applyCanvasSnapshot(const std::vector<SCanvasSavedWindow>& snapshot,
         if (!workspace) {
             if (const auto ws = saved.workspace.lock(); ws) {
                 moveCanvasWindowToWorkspace(w, ws);
-                if (g_canvasNativeLayout.contains(w->m_stableID)) g_canvasNativeLayout.at(w->m_stableID).workspace = ws;
+                if (g_canvasNativeLayout.contains(w->metadata().stableID())) g_canvasNativeLayout.at(w->metadata().stableID()).workspace = ws;
             }
         }
         const auto TARGET = w->layoutTarget(); // moving workspaces can replace it
@@ -11695,7 +11695,7 @@ bool CScrollOverview::canvasPlaceAction(const std::string& action) {
     try { place = std::stoi(action.substr(5)); } catch (...) { return false; }
     const bool STAY   = action.ends_with(" stay");
     const auto WINDOW = getOverviewWindowToShow(Desktop::focusState()->window());
-    const auto TARGET = shouldShowOverviewWindow(WINDOW) && !WINDOW->m_pinned ? WINDOW->layoutTarget() : nullptr;
+    const auto TARGET = shouldShowOverviewWindow(WINDOW) && !windowPinned(WINDOW) ? WINDOW->layoutTarget() : nullptr;
     if (place < 1 || place > 10 || !TARGET || place == g_place)
         return place >= 1 && place <= 10;
     checkpointCanvas();

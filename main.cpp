@@ -576,7 +576,7 @@ static void hkX11ClientMessage(void* thisptr, xcb_client_message_event_t* e) {
 
     SP<CXWaylandSurface> surface;
     for (const auto& window : Desktop::windowState()->windows()) {
-        if (window && window->m_isX11 && window->m_xwaylandSurface && window->m_xwaylandSurface->m_xID == e->window) {
+        if (window && window->backend().isX11() && window->m_xwaylandSurface && window->m_xwaylandSurface->m_xID == e->window) {
             surface = window->m_xwaylandSurface.lock();
             break;
         }

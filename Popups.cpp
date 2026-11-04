@@ -48,7 +48,7 @@ bool canvasRepositionPopup(Desktop::View::CPopup* popup) {
 
 // Whether any popup of the window is fading in or out.
 bool popupTreeFading(const PHLWINDOW& window) {
-    if (!window || window->m_isX11 || !window->m_popupHead)
+    if (!window || window->backend().isX11() || !window->m_popupHead)
         return false;
     bool fading = false;
     window->m_popupHead->breadthfirst(

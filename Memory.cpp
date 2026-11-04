@@ -99,7 +99,7 @@ namespace SpatialOverview::Memory {
             return std::nullopt;
         load();
 
-        const auto KLASS = clean(window->m_class.empty() ? window->m_initialClass : window->m_class);
+        const auto KLASS = clean(window->metadata().appID().empty() ? window->metadata().initialAppID() : window->metadata().appID());
         const auto TITLE = clean(Navigator::displayTitle(window));
         if (KLASS.empty())
             return std::nullopt;
@@ -126,13 +126,13 @@ namespace SpatialOverview::Memory {
             const bool  SIBLING = std::ranges::any_of(WINDOWS, [&](const PHLWINDOW& other) {
                 const auto OTHERWORKSPACE = other ? other->m_workspace : PHLWORKSPACE{};
                 const bool SAMEWORKSPACE = workspace.empty() || (OTHERWORKSPACE && workspace == "workspace:" + OTHERWORKSPACE->m_name);
-                return other && other != window && other->m_isMapped && clean(other->m_class) == KLASS && SAMEWORKSPACE;
+                return other && other != window && other->mapped() && clean(other->metadata().appID()) == KLASS && SAMEWORKSPACE;
             });
             if (SIBLING)
                 return std::nullopt;
         }
 
-        best->window = window->m_stableID;
+        best->window = window->metadata().stableID();
         return best->box;
     }
 
@@ -152,23 +152,23 @@ namespace SpatialOverview::Memory {
         for (const auto& placement : windows) {
             if (!placement.window || !saneBox(placement.box))
                 continue;
-            const auto KLASS = clean(placement.window->m_class.empty() ? placement.window->m_initialClass : placement.window->m_class);
+            const auto KLASS = clean(placement.window->metadata().appID().empty() ? placement.window->metadata().initialAppID() : placement.window->metadata().appID());
             if (KLASS.empty())
                 continue;
             next.push_back({.workspace = clean(placement.workspace), .klass = KLASS, .title = clean(Navigator::displayTitle(placement.window)), .box = placement.box, .seen = NOW,
-                            .window = placement.window->m_stableID});
+                            .window = placement.window->metadata().stableID()});
         }
 
         // Entries describing a window that is still open are superseded by
         // the lines above; a window that has closed keeps its last home.
         for (auto entry : g_entries) {
             if (entry.window && std::ranges::any_of(windows, [&entry](const SWindowPlacement& placement) {
-                    return placement.window && placement.window->m_stableID == entry.window;
+                    return placement.window && placement.window->metadata().stableID() == entry.window;
                 }))
                 continue;
             // A partial workspace save does not release claims held by other live windows.
             if (entry.workspace.empty() || (entry.window && !std::ranges::any_of(Desktop::windowState()->windows(), [&entry](const PHLWINDOW& window) {
-                    return window && window->m_isMapped && window->m_stableID == entry.window;
+                    return window && window->mapped() && window->metadata().stableID() == entry.window;
                 })))
                 entry.window = 0;
             const bool DUPLICATE = std::ranges::any_of(next, [&entry](const SEntry& current) {

@@ -104,7 +104,7 @@ static CBox clipScrollingIndicatorBox(CBox box, const CDropIndicator::SRenderPar
 }
 
 static int indicatorRounding(const CDropIndicator::SRenderParams& params) {
-    const float ROUNDING = params.anchor.window ? params.anchor.window->rounding() : ScrollOverview::Config::getValue<int>("decoration:rounding");
+    const float ROUNDING = params.anchor.window ? params.anchor.window->presentation().rounding() : ScrollOverview::Config::getValue<int>("decoration:rounding");
     const float SCALE    = std::max(params.renderScale, 0.01F) * std::max<float>(params.monitor ? params.monitor->m_scale : 1.F, 0.01F);
 
     return std::max(0, sc<int>(std::round(ROUNDING * SCALE)));
@@ -112,7 +112,7 @@ static int indicatorRounding(const CDropIndicator::SRenderParams& params) {
 
 static float indicatorRoundingPower(const CDropIndicator::SRenderParams& params) {
     if (params.anchor.window)
-        return params.anchor.window->roundingPower();
+        return params.anchor.window->presentation().roundingPower();
 
     return ScrollOverview::Config::getValue<float>("decoration:rounding_power");
 }
