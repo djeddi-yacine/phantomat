@@ -5453,6 +5453,14 @@ void CScrollOverview::forwardCanvasPointerMotion(uint32_t timeMs) {
     if (!isCanvasDesktop() || workspaceCanvasSpecialActive() || !ScrollOverview::Config::getCanvasDirectInput() || spacePanHeld || scrollingPanPointerDown || dragActiveWindow || resizeActiveWindow)
         return;
 
+    // Hyprland replays "the pointer moved" at the same spot after every focus
+    // change, and the camera slides windows under a resting pointer. Only a
+    // pointer that really moved (or a button press) may hover-focus; otherwise
+    // each keyboard step would hand focus to whatever slid under the mouse.
+    const auto POINTER      = g_pInputManager->getMouseCoordsInternal();
+    const bool POINTERMOVED = timeMs != 0 || POINTER.distanceSq(hoverPointerPos) > 0.25;
+    hoverPointerPos         = POINTER;
+
     CBox       BOX;
     Vector2D   WINDOWLOCAL;
     Vector2D   SURFACELOCAL;
@@ -5519,7 +5527,7 @@ void CScrollOverview::forwardCanvasPointerMotion(uint32_t timeMs) {
     g_pSeatManager->sendPointerMotion(timeMs ? timeMs : Time::millis(Time::steadyNow()), SURFACELOCAL);
     g_pSeatManager->sendPointerFrame();
 
-    if (ScrollOverview::Config::getCanvasHoverFocus() && !(canvasNavigationActive && SpatialOverview::Navigator::isOpen()) && !hoverFocusSettling &&
+    if (POINTERMOVED && ScrollOverview::Config::getCanvasHoverFocus() && !(canvasNavigationActive && SpatialOverview::Navigator::isOpen()) && !hoverFocusSettling &&
         canvasForwardedPointerButtons.empty() && WINDOW != PREVIOUSWINDOW) {
         size_t workspaceIdx = viewportCurrentWorkspace;
         for (size_t i = 0; i < images.size(); ++i) {

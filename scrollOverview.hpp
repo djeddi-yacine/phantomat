@@ -460,6 +460,7 @@ class CScrollOverview : public IOverview {
     std::unordered_set<uint32_t>     navigatorSwallowedButtons;
     // After a keyboard jump the pointer is usually resting on some other
     // window; hover focus waits until it actually enters a different one.
+    Vector2D                         hoverPointerPos            = Vector2D{-1e9, -1e9}; // pointer position at the last hover check
     bool                             hoverFocusSettling   = false;
     bool                             hoverFocusSettleSeen = false;
     PHLWINDOWREF                     hoverFocusSettleWindow;
