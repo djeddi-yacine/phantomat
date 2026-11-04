@@ -5,13 +5,17 @@
 #include <cmath>
 #include <sstream>
 
-#define private public
 #include <hyprland/src/desktop/view/window/Window.hpp>
 #include <hyprland/src/layout/algorithm/Algorithm.hpp>
 #include <hyprland/src/layout/algorithm/tiled/scrolling/ScrollingAlgorithm.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/render/pass/RectPassElement.hpp>
-#undef private
+
+// The scrolling layout keeps its orientation in private state.
+struct SScrollingDataTag {
+    friend constexpr auto privateMember(SScrollingDataTag);
+};
+template struct SPrivateMember<SScrollingDataTag, &Layout::Tiled::CScrollingAlgorithm::m_scrollingData>;
 
 namespace {
 
@@ -35,18 +39,20 @@ static bool isVerticalSide(const std::string& side) {
 }
 
 static Layout::Tiled::CScrollingAlgorithm* scrollingAlgorithmForWorkspace(const PHLWORKSPACE& workspace) {
-    if (!workspace || !workspace->m_space || !workspace->m_space->algorithm())
+    if (!workspace || !workspace->space() || !workspace->space()->algorithm())
         return nullptr;
 
-    return dc<Layout::Tiled::CScrollingAlgorithm*>(workspace->m_space->algorithm()->m_tiled.get());
+    return dc<Layout::Tiled::CScrollingAlgorithm*>(workspace->space()->algorithm()->tiledAlgo().get());
 }
 
+
 static bool scrollingPrimaryHorizontal(const PHLWORKSPACE& workspace) {
-    const auto ALGO = scrollingAlgorithmForWorkspace(workspace);
-    if (!ALGO || !ALGO->m_scrollingData || !ALGO->m_scrollingData->controller)
+    const auto  ALGO = scrollingAlgorithmForWorkspace(workspace);
+    const auto& DATA = ALGO ? ALGO->*privateMember(SScrollingDataTag{}) : nullptr;
+    if (!DATA || !DATA->controller)
         return true;
 
-    return ALGO->m_scrollingData->controller->isPrimaryHorizontal();
+    return DATA->controller->isPrimaryHorizontal();
 }
 
 static CBox scrollingIndicatorBox(const CDropIndicator::SRenderParams& params) {

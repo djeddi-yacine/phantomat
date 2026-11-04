@@ -45,9 +45,9 @@ struct SHudRegion {
     std::array<float, 4> screen{}; // device px, top-left origin
     std::array<float, 4> uv{};     // x, y, w, h in the atlas
 };
-bool updateHud(const SP<Render::ITexture>& texture, const std::array<float, 4>& rect, float alpha, const SP<Render::ITexture>& atlas = nullptr,
+bool updateHud(Render::CRenderContext& ctx, const SP<Render::ITexture>& texture, const std::array<float, 4>& rect, float alpha, const SP<Render::ITexture>& atlas = nullptr,
                const std::vector<SHudRegion>& regions = {});
-void applyPendingHud();
+void applyPendingHud(Render::CRenderContext& ctx);
 void discardPendingHud();
 
 }

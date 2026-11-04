@@ -244,8 +244,8 @@ static void noteCanvasWindowedBox(const PHLWINDOW& window) {
 }
 
 static std::string canvasMemoryKey(const PHLWORKSPACE& workspace, const PHLMONITOR& monitor, bool workspaceBound) {
-    if (workspaceBound && workspace && !workspace->m_name.empty())
-        return "workspace:" + workspace->m_name;
+    if (workspaceBound && workspace && !workspace->displayName().empty())
+        return "workspace:" + workspace->displayName();
     return monitor ? monitor->m_name : std::string{};
 }
 
@@ -269,14 +269,14 @@ static SCanvasSavedWindow saveCanvasWindow(PHLWINDOW w) {
 static bool attachCanvasLayoutTarget(const PHLWINDOW& w) {
     const auto TARGET    = w ? w->layoutTarget() : nullptr;
     const auto WORKSPACE = w ? w->m_workspace : nullptr;
-    if (!TARGET || !valid(WORKSPACE) || !WORKSPACE->m_space)
+    if (!TARGET || !valid(WORKSPACE) || !WORKSPACE->space())
         return false;
-    if (TARGET->space() != WORKSPACE->m_space || !TARGET->space()->workspace()) {
+    if (TARGET->space() != WORKSPACE->space() || !TARGET->space()->workspace()) {
         Log::logger->log(Log::WARN, "[spatialoverview] re-attaching window {:x} to the layout of workspace {}", rc<uintptr_t>(w.get()), workspaceID(WORKSPACE));
-        g_layoutManager->newTarget(TARGET, WORKSPACE->m_space);
+        g_layoutManager->newTarget(TARGET, WORKSPACE->space());
     }
     const auto SPACE = TARGET->space();
-    return SPACE == WORKSPACE->m_space && SPACE->workspace() == WORKSPACE;
+    return SPACE == WORKSPACE->space() && SPACE->workspace() == WORKSPACE;
 }
 
 // Every floating/tiling change the canvas makes goes through here. Tiling
@@ -436,7 +436,7 @@ static void restoreActiveWorkspaceVisibility() {
             if (!workspace)
                 continue;
 
-            workspace->m_visible = true;
+            workspace->setVisible(true);
             workspace->m_alpha->setValueAndWarp(1.F);
             workspace->m_renderOffset->setValueAndWarp(Vector2D{});
         }
@@ -592,7 +592,7 @@ static bool shouldShowOverviewWindow(const PHLWINDOW& window) {
     if (!validMapped(WINDOW))
         return false;
 
-    if (WINDOW->m_workspace && WINDOW->m_workspace->m_isSpecialWorkspace)
+    if (WINDOW->m_workspace && isSpecialWorkspace(WINDOW->m_workspace))
         return false;
 
     if (windowPinned(WINDOW) && WINDOW->isFloating())
@@ -619,7 +619,7 @@ static bool canvasScreenFixedWindow(const PHLWINDOW& window) {
         return false;
     if (window->backend().isX11() && window->backend().traits().overrideRedirect)
         return true;
-    return windowPinned(window) && window->isFloating() && !(window->m_workspace && window->m_workspace->m_isSpecialWorkspace);
+    return windowPinned(window) && window->isFloating() && !(window->m_workspace && isSpecialWorkspace(window->m_workspace));
 }
 
 static bool shouldShowPinnedFloatingOverviewWindow(const PHLWINDOW& window) {
@@ -1375,10 +1375,10 @@ static Layout::Tiled::CScrollingAlgorithm* overviewScrollingAlgorithmForTarget(c
 }
 
 static Layout::Tiled::CScrollingAlgorithm* overviewScrollingAlgorithmForWorkspace(const PHLWORKSPACE& workspace) {
-    if (!workspace || !workspace->m_space || !workspace->m_space->algorithm())
+    if (!workspace || !workspace->space() || !workspace->space()->algorithm())
         return nullptr;
 
-    return dc<Layout::Tiled::CScrollingAlgorithm*>(workspace->m_space->algorithm()->m_tiled.get());
+    return dc<Layout::Tiled::CScrollingAlgorithm*>(workspace->space()->algorithm()->m_tiled.get());
 }
 
 static bool isWorkspaceScrolling(const PHLWORKSPACE& workspace) {
@@ -1406,10 +1406,10 @@ static CBox getOverviewWorkspaceUsableBox(const PHLWORKSPACE& workspace, PHLMONI
         return getOverviewBox(USABLE, monitor, scale, viewOffset, offset, layout);
     }
 
-    if (!workspace->m_space)
+    if (!workspace->space())
         return getOverviewWorkspaceBox(monitor, scale, viewOffset, offset, layout);
 
-    auto USABLE = workspace->m_space->workArea();
+    auto USABLE = workspace->space()->workArea();
     USABLE.translate(-monitor->m_position);
     USABLE.w = std::max(USABLE.w, 1.0);
     USABLE.h = std::max(USABLE.h, 1.0);
@@ -3094,7 +3094,7 @@ void CScrollOverview::rebuildWorkspaceImages() {
 
     for (const auto& w : State::workspaceState()->workspaces()) {
         const auto WORKSPACE = w.lock();
-        if (!valid(WORKSPACE) || (!isCanvasDesktop() && WORKSPACE->m_monitor != pMonitor) || WORKSPACE->m_isSpecialWorkspace)
+        if (!valid(WORKSPACE) || (!isCanvasDesktop() && WORKSPACE->m_monitor != pMonitor) || isSpecialWorkspace(WORKSPACE))
             continue;
         if (workspaceBoundCanvas && WORKSPACE != startedOn)
             continue;
@@ -4495,7 +4495,7 @@ static std::string canvasWorkspaceStateJson() {
     std::string workspaces;
     for (const auto& workspaceRef : State::workspaceState()->workspaces()) {
         const auto WORKSPACE = workspaceRef.lock();
-        if (!valid(WORKSPACE) || WORKSPACE->m_isSpecialWorkspace)
+        if (!valid(WORKSPACE) || isSpecialWorkspace(WORKSPACE))
             continue;
 
         PHLMONITOR monitor;
@@ -4524,7 +4524,7 @@ static std::string canvasWorkspaceStateJson() {
         const auto WORKSPACEMONITOR = monitor ? monitor : WORKSPACE->m_monitor.lock();
         const auto MONITORNAME      = WORKSPACEMONITOR ? WORKSPACEMONITOR->m_name : std::string{};
         workspaces += std::format("{}{{\"id\": {}, \"name\": {}, \"active\": {}, \"canvas\": {}, \"rendering\": {}, \"monitor\": {}, \"navigating\": {}, \"view\": [{:.1f}, {:.1f}]}}",
-                                  workspaces.empty() ? "" : ", ", workspaceID(WORKSPACE), jsonString(WORKSPACE->m_name), active ? "true" : "false", enabled ? "true" : "false", rendering ? "true" : "false", jsonString(MONITORNAME),
+                                  workspaces.empty() ? "" : ", ", workspaceID(WORKSPACE), jsonString(WORKSPACE->displayName()), active ? "true" : "false", enabled ? "true" : "false", rendering ? "true" : "false", jsonString(MONITORNAME),
                                   navigating ? "true" : "false", view.x, view.y);
     }
     return workspaces;
@@ -4589,7 +4589,7 @@ bool canvasTogglePin(PHLWINDOW window) {
 
     window            = getOverviewWindowToShow(window);
     const auto TARGET = validMapped(window) ? window->layoutTarget() : nullptr;
-    if (!TARGET || !window->isFloating() || Fullscreen::controller()->isFullscreen(window) || (window->m_workspace && window->m_workspace->m_isSpecialWorkspace))
+    if (!TARGET || !window->isFloating() || Fullscreen::controller()->isFullscreen(window) || (window->m_workspace && isSpecialWorkspace(window->m_workspace)))
         return true;
 
     if (windowPinned(window)) {
@@ -4920,7 +4920,7 @@ bool CScrollOverview::manageCanvasWindow(PHLWINDOW window, bool placeNew) {
     if (!shouldShowOverviewWindow(window) || !canvasWindowInWorkspace(window) || !TARGET || windowPinned(window) || isScreensaverWindow(window))
         return false;
 
-    if (window->m_workspace && window->m_workspace->m_isSpecialWorkspace) return false;
+    if (window->m_workspace && isSpecialWorkspace(window->m_workspace)) return false;
     if (workspaceBoundCanvas) {
         // Source and destination listeners may run in either order. Release
         // the old native owner before capturing the destination's native state.
@@ -5560,10 +5560,10 @@ const std::string& CScrollOverview::canvasPlacementError() const {
 }
 
 static void syncWorkspaceGeometry(const PHLWORKSPACE& workspace) {
-    if (!workspace || !workspace->m_space)
+    if (!workspace || !workspace->space())
         return;
 
-    for (const auto& targetRef : workspace->m_space->targets()) {
+    for (const auto& targetRef : workspace->space()->targets()) {
         const auto TARGET = targetRef.lock();
         if (TARGET)
             TARGET->warpPositionSize();
@@ -7562,13 +7562,13 @@ void CScrollOverview::renderWorkspaceBackground(Render::CRenderContext& ctx, PHL
         return;
 
     const auto workspace         = workspaceImage->pWorkspace;
-    const bool WASVISIBLE        = workspace->m_visible;
+    const bool WASVISIBLE        = workspace->visible();
     const bool WASFORCERENDERING = workspace->m_forceRendering;
-    workspace->m_visible         = true;
+    workspace->setVisible(true);
     workspace->m_forceRendering  = true;
 
     auto restoreWorkspaceState = Hyprutils::Utils::CScopeGuard([workspace, WASVISIBLE, WASFORCERENDERING] {
-        workspace->m_visible        = WASVISIBLE;
+        workspace->setVisible(WASVISIBLE);
         workspace->m_forceRendering = WASFORCERENDERING;
     });
 
@@ -7597,13 +7597,13 @@ void CScrollOverview::renderWorkspaceLive(Render::CRenderContext& ctx, PHLMONITO
         return;
 
     const auto workspace         = workspaceImage->pWorkspace;
-    const bool WASVISIBLE        = workspace->m_visible;
+    const bool WASVISIBLE        = workspace->visible();
     const bool WASFORCERENDERING = workspace->m_forceRendering;
-    workspace->m_visible         = true;
+    workspace->setVisible(true);
     workspace->m_forceRendering  = true;
 
     auto restoreWorkspaceState = Hyprutils::Utils::CScopeGuard([workspace, WASVISIBLE, WASFORCERENDERING] {
-        workspace->m_visible        = WASVISIBLE;
+        workspace->setVisible(WASVISIBLE);
         workspace->m_forceRendering = WASFORCERENDERING;
     });
 
@@ -9481,7 +9481,7 @@ void CScrollOverview::followLinkedCamera() {
 void CScrollOverview::syncCanvasWindowScreens() {
     const auto MONITOR = pMonitor.lock();
     if (workspaceBoundCanvas || !MONITOR || !isCanvasDesktop() || closing || canvasNavigationActive || !canvasAtRestZoom() || viewOffset->isBeingAnimated() || scale->isBeingAnimated() ||
-        dragActiveWindow || g_pointerGrabOverview || !MONITOR->m_activeWorkspace || MONITOR->m_activeWorkspace->m_isSpecialWorkspace)
+        dragActiveWindow || g_pointerGrabOverview || !MONITOR->m_activeWorkspace || isSpecialWorkspace(MONITOR->m_activeWorkspace))
         return;
     const auto SCREEN = MONITOR->logicalBox();
     for (const auto& windowRef : Desktop::windowState()->windows()) {
@@ -9573,7 +9573,7 @@ void CScrollOverview::onWorkspaceChange() {
     const bool INSERTEDWORKSPACE = std::find(previousWorkspaceIDs.begin(), previousWorkspaceIDs.end(), workspaceID(NEWWORKSPACE)) == previousWorkspaceIDs.end();
     const auto REQUESTEDREMOVEDWORKSPACE = pendingRemovedWorkspace.lock();
     const bool SHOULDREMOVEPREVIOUSWORKSPACE =
-        previousStartedOn && previousStartedOn != NEWWORKSPACE && !previousStartedOn->m_isSpecialWorkspace && !previousStartedOn->isPersistent() && previousStartedOn->getWindowCount() == 0;
+        previousStartedOn && previousStartedOn != NEWWORKSPACE && !isSpecialWorkspace(previousStartedOn) && !previousStartedOn->isPersistent() && previousStartedOn->getWindowCount() == 0;
     const auto REMOVEDWORKSPACE = REQUESTEDREMOVEDWORKSPACE ? REQUESTEDREMOVEDWORKSPACE : SHOULDREMOVEPREVIOUSWORKSPACE ? previousStartedOn : PHLWORKSPACE{};
 
     pendingRemovedWorkspace = REMOVEDWORKSPACE;
@@ -11118,7 +11118,7 @@ void CScrollOverview::renderExperimentChrome(Render::CRenderContext& ctx, PHLMON
         if (BOX.empty())
             continue;
         const auto ID = workspaceID(WINDOW->m_workspace);
-        names[ID] = WINDOW->m_workspace->m_name.empty() ? std::to_string(ID) : WINDOW->m_workspace->m_name;
+        names[ID] = WINDOW->m_workspace->displayName().empty() ? std::to_string(ID) : WINDOW->m_workspace->displayName();
         if (!areas.contains(ID))
             areas[ID] = BOX;
         else {
@@ -11579,7 +11579,7 @@ bool CScrollOverview::flightDeckAction(const std::string& action) {
     if (action.starts_with("area ")) {
         int id=0; try { id=std::stoi(action.substr(5)); } catch (...) { return false; }
         const auto ws = State::workspaceState()->query().id(id).run();
-        if (!ws || ws->m_isSpecialWorkspace) return false;
+        if (!ws || isSpecialWorkspace(ws)) return false;
         if (workspaceBoundCanvas && ws != startedOn) return false;
         for (const auto& w : Desktop::windowState()->windows())
             if (shouldShowOverviewWindow(w) && canvasWindowInWorkspace(w) && w->m_workspace==ws) return followCanvasWindow(w,true,true);

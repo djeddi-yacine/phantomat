@@ -23,37 +23,46 @@
 #include <variant>
 #include <vector>
 
+#include "globals.hpp"
 #include <hyprland/src/desktop/DesktopTypes.hpp>
 #include <hyprland/src/helpers/math/Math.hpp>
 
-#define private public
-#define protected public
 #include <hyprland/src/desktop/view/Popup.hpp>
 #include <hyprland/src/desktop/view/window/Window.hpp>
 #include <hyprland/src/protocols/XDGShell.hpp>
-#undef protected
-#undef private
 
 std::optional<CBox> canvasPopupConstraint(const PHLWINDOW& window);
 
+// CPopup::reposition() positions against the monitor; a canvas window's popups
+// use the visible canvas box instead. Both members are private in 0.57.
+struct SPopupBackendTag {
+    friend constexpr auto privateMember(SPopupBackendTag);
+};
+struct SPopupParentCoordsTag {
+    friend constexpr auto privateMember(SPopupParentCoordsTag);
+};
+template struct SPrivateMember<SPopupBackendTag, &Desktop::View::CPopup::m_backend>;
+template struct SPrivateMember<SPopupParentCoordsTag, &Desktop::View::CPopup::t1ParentCoords>;
+
 bool canvasRepositionPopup(Desktop::View::CPopup* popup) {
-    if (!popup || !popup->m_resource || popup->m_windowOwner.expired())
+    const auto& BACKEND = popup ? popup->*privateMember(SPopupBackendTag{}) : SP<Desktop::View::IPopupBackend>{};
+    if (!BACKEND || !popup->windowOwner())
         return false;
-    const auto CONSTRAINT = canvasPopupConstraint(popup->m_windowOwner.lock());
+    const auto CONSTRAINT = canvasPopupConstraint(popup->windowOwner());
     if (!CONSTRAINT)
         return false;
-    popup->m_resource->applyPositioning(*CONSTRAINT, popup->t1ParentCoords());
+    BACKEND->applyPositioning(*CONSTRAINT, (popup->*privateMember(SPopupParentCoordsTag{}))());
     return true;
 }
 
 // Whether any popup of the window is fading in or out.
 bool popupTreeFading(const PHLWINDOW& window) {
-    if (!window || window->backend().isX11() || !window->m_popupHead)
+    if (!window || window->backend().isX11() || !window->popupHead())
         return false;
     bool fading = false;
-    window->m_popupHead->breadthfirst(
+    window->popupHead()->breadthfirst(
         [&fading](SP<Desktop::View::CPopup> popup, void*) {
-            if (popup && popup->m_alpha.get(Desktop::View::POPUP_ALPHA_FADE)->isBeingAnimated())
+            if (popup && popup->alpha().get(Desktop::View::POPUP_ALPHA_FADE)->isBeingAnimated())
                 fading = true;
         },
         nullptr);

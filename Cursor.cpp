@@ -18,20 +18,22 @@
 #include <variant>
 #include <vector>
 
+#include "globals.hpp"
 #include <hyprland/src/desktop/DesktopTypes.hpp>
 #include <hyprland/src/helpers/math/Math.hpp>
 
-#define private public
-#define protected public
 #include <hyprland/src/managers/input/InputManager.hpp>
-#undef protected
-#undef private
 #include <hyprland/src/desktop/view/WLSurface.hpp>
 #include <hyprland/src/protocols/core/Compositor.hpp>
 
+struct SCursorSurfaceInfoTag {
+    friend constexpr auto privateMember(SCursorSurfaceInfoTag);
+};
+template struct SPrivateMember<SCursorSurfaceInfoTag, &CInputManager::m_cursorSurfaceInfo>;
+
 // No cursor at all, or Wine's way of hiding it: an empty 1x1 image.
 bool canvasCursorHidden() {
-    const auto& CURSOR = g_pInputManager->m_cursorSurfaceInfo;
+    const auto& CURSOR = (*g_pInputManager).*privateMember(SCursorSurfaceInfoTag{});
     if (CURSOR.hidden)
         return true;
     const auto SURFACE = CURSOR.wlSurface ? CURSOR.wlSurface->resource() : nullptr;

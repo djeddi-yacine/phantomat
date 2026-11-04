@@ -31,3 +31,19 @@ inline WORKSPACEID workspaceID(const PHLWORKSPACE& workspace) {
 inline bool windowPinned(const PHLWINDOW& window) {
     return window && (window->m_state & Desktop::View::WINDOW_STATE_PINNED);
 }
+
+inline bool isSpecialWorkspace(const PHLWORKSPACE& workspace) {
+    return workspace && workspace->type() == Workspace::eWorkspaceType::SPECIAL;
+}
+
+// Names a private Hyprland member without changing access or guessing layout:
+// explicit template instantiation may name it, and the compiler checks the
+// member still exists with this type. Declare a tag with a friend
+// privateMember(Tag), instantiate SPrivateMember<Tag, &Class::member>, then use
+// object.*privateMember(Tag{}).
+template <typename TTag, auto MEMBER>
+struct SPrivateMember {
+    friend constexpr auto privateMember(TTag) {
+        return MEMBER;
+    }
+};

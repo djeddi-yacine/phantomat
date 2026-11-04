@@ -150,10 +150,6 @@ int dispatcherFactoryLua(lua_State* L, std::string_view name) {
     if (!DISPATCHER->isArgValid(arg))
         return luaL_error(L, "%s: invalid argument '%s', %s", DISPATCHER->name.data(), arg, DISPATCHER->invalidArgError.data());
 
-    if (g_pKeybindManager && g_pKeybindManager->m_currentKeybind && g_pKeybindManager->m_currentKeybind->handler == "__lua") {
-        return runDispatcherNow(L, *DISPATCHER, arg);
-    }
-
     pushDispatcherBindAction(L, DISPATCHER->name.data(), arg);
 
     return 1;

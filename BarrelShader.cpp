@@ -19,15 +19,23 @@
 #include <string>
 #include <vector>
 
-#define private public
-#define protected public
 #include <hyprland/src/render/OpenGL.hpp>
 #include <hyprland/src/render/Renderer.hpp>
-#undef protected
-#undef private
+#include <hyprland/src/state/MonitorState.hpp>
 
 #include "Config.hpp"
 #include "Tuning.hpp"
+
+// The overview lens replaces Hyprland's final screen shader for its duration;
+// 0.57 keeps that shader private and exposes only applyScreenShader().
+struct SFinalScreenShaderTag {
+    friend constexpr auto privateMember(SFinalScreenShaderTag);
+};
+template struct SPrivateMember<SFinalScreenShaderTag, &Render::GL::CHyprOpenGLImpl::m_finalScreenShader>;
+
+static SP<CShader> finalScreenShader() {
+    return Render::GL::g_pHyprOpenGL ? (*Render::GL::g_pHyprOpenGL).*privateMember(SFinalScreenShaderTag{}) : nullptr;
+}
 
 namespace SpatialOverview::BarrelShader {
 namespace {
@@ -108,8 +116,8 @@ void requestReload() {
         return;
 
     g_pHyprRenderer->m_reloadScreenShader = true;
-    if (const auto MONITOR = ctx.m_data.pMonitor.lock())
-        g_pHyprRenderer->damageMonitor(MONITOR);
+    for (const auto& monitor : State::monitorState()->monitors())
+        g_pHyprRenderer->damageMonitor(monitor);
 }
 
 }
@@ -156,7 +164,7 @@ void updateUniforms(float progress) {
         return;
     }
 
-    const auto SHADER = Render::GL::g_pHyprOpenGL->m_finalScreenShader;
+    const auto SHADER = finalScreenShader();
     if (!SHADER)
         return;
 
@@ -195,12 +203,12 @@ void updateUniforms(float progress) {
     Render::GL::g_pHyprOpenGL->useShader(PREVIOUS);
 }
 
-bool updateHud(const SP<Render::ITexture>& texture, const std::array<float, 4>& rect, float alpha, const SP<Render::ITexture>& atlas,
+bool updateHud(Render::CRenderContext& ctx, const SP<Render::ITexture>& texture, const std::array<float, 4>& rect, float alpha, const SP<Render::ITexture>& atlas,
                const std::vector<SHudRegion>& regions) {
     if (!installed || !Render::GL::g_pHyprOpenGL || !texture || !texture->m_texID)
         return false;
 
-    const auto SHADER = Render::GL::g_pHyprOpenGL->m_finalScreenShader;
+    const auto SHADER = finalScreenShader();
     if (!SHADER || !SHADER->program() || glGetUniformLocation(SHADER->program(), "hudRect") < 0 ||
         glGetUniformLocation(SHADER->program(), "hudTex") < 0)
         return false;
@@ -210,13 +218,13 @@ bool updateHud(const SP<Render::ITexture>& texture, const std::array<float, 4>& 
     return true;
 }
 
-void applyPendingHud() {
+void applyPendingHud(Render::CRenderContext& ctx) {
     auto pending = std::move(pendingHud);
     pendingHud   = {};
     if (!installed || !Render::GL::g_pHyprOpenGL)
         return;
 
-    const auto SHADER = Render::GL::g_pHyprOpenGL->m_finalScreenShader;
+    const auto SHADER = finalScreenShader();
     if (!SHADER || !SHADER->program())
         return;
     const auto RECT    = glGetUniformLocation(SHADER->program(), "hudRect");
@@ -282,7 +290,7 @@ bool updateMinimap(const SMinimapData& data) {
     if (!installed || !Render::GL::g_pHyprOpenGL)
         return false;
 
-    const auto SHADER = Render::GL::g_pHyprOpenGL->m_finalScreenShader;
+    const auto SHADER = finalScreenShader();
     if (!SHADER || !SHADER->program())
         return false;
 

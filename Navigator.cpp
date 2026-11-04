@@ -87,7 +87,7 @@ namespace SpatialOverview::Navigator {
                 return false;
             if (const auto WORKSPACE = g_sessionWorkspace.lock(); WORKSPACE && window->m_workspace != WORKSPACE)
                 return false;
-            if (window->m_workspace && window->m_workspace->m_isSpecialWorkspace)
+            if (window->m_workspace && isSpecialWorkspace(window->m_workspace))
                 return false;
             if (windowPinned(window))
                 return false;

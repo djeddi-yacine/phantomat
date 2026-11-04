@@ -31,6 +31,14 @@
 #include "OverviewPassElement.hpp"
 #include "OverviewRender.hpp"
 
+// CRenderPass keeps its queued elements private. The overview captures one
+// window's pass in its own CRenderPass and edits those surface elements before
+// they join the frame pass.
+struct SPassElementsTag {
+    friend constexpr auto privateMember(SPassElementsTag);
+};
+template struct SPrivateMember<SPassElementsTag, &Render::CRenderPass::m_passElements>;
+
 namespace OverviewWindow {
 namespace {
 
@@ -62,17 +70,10 @@ struct COverviewAnimatedVariableAccess : Hyprutils::Animation::CBaseAnimatedVari
     }
 };
 
-// CRenderPass keeps its queued elements private. The overview captures one
-// window's pass in its own CRenderPass and edits those surface elements before
-// they join the frame pass; explicit instantiation may name the private member.
-auto& capturedPassElements(Render::CRenderPass& pass);
-template <auto MEMBER>
-struct SCapturedPassAccess {
-    friend auto& capturedPassElements(Render::CRenderPass& pass) {
-        return pass.*MEMBER;
-    }
-};
-template struct SCapturedPassAccess<&Render::CRenderPass::m_passElements>;
+
+static auto& capturedPassElements(Render::CRenderPass& pass) {
+    return pass.*privateMember(SPassElementsTag{});
+}
 
 // IHyprRenderer::renderWindow is protected; a derived type may name it.
 struct SRendererAccess : Render::IHyprRenderer {

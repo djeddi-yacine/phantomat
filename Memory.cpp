@@ -125,7 +125,7 @@ namespace SpatialOverview::Memory {
             const auto& WINDOWS = Desktop::windowState()->windows();
             const bool  SIBLING = std::ranges::any_of(WINDOWS, [&](const PHLWINDOW& other) {
                 const auto OTHERWORKSPACE = other ? other->m_workspace : PHLWORKSPACE{};
-                const bool SAMEWORKSPACE = workspace.empty() || (OTHERWORKSPACE && workspace == "workspace:" + OTHERWORKSPACE->m_name);
+                const bool SAMEWORKSPACE = workspace.empty() || (OTHERWORKSPACE && workspace == "workspace:" + OTHERWORKSPACE->displayName());
                 return other && other != window && other->mapped() && clean(other->metadata().appID()) == KLASS && SAMEWORKSPACE;
             });
             if (SIBLING)
