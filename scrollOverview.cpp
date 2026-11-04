@@ -11541,6 +11541,10 @@ void CScrollOverview::queueSelectionOutline(Render::CRenderContext& ctx, PHLMONI
     const float FADE = overviewProgress() * workspaceHudOpacity();
     if (!monitor || !window || FADE <= 0.01F || box.empty() || !overviewBoxIntersectsMonitor(box.copy().expand(16.F), monitor))
         return;
+    // The outline stands outside the window, where a wobble cannot bend it.
+    const bool MOVING = window == getOverviewWindowToShow(dragActiveWindow.lock()) || window->effects().hasActiveTransformers();
+    if (MOVING && ScrollOverview::Config::getNavigatorHideOutlineInMotion())
+        return;
 
     const float SCALE    = std::max(monitor->m_scale, 0.01F);
     const int   ROUNDING = std::max(0, sc<int>(std::round(window->presentation().rounding() * SCALE * scale->value() * overviewPreviewScale())));

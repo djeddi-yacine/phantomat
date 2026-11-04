@@ -607,6 +607,9 @@ static void registerConfigValues() {
     HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
                                   makeShared<CBoolValue>("plugin:spatialoverview:navigator:label_drag", "keep a dragged window's title on its card", true));
     HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
+                                  makeShared<CBoolValue>("plugin:spatialoverview:navigator:hide_outline_in_motion",
+                                                         "hide the selection outline while its client is dragged or wobbling; it returns once settled", true));
+    HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
                                   makeShared<CStringValue>("plugin:spatialoverview:navigator:drag_behavior",
                                                            "selection reticle while dragging: follow, jump or hidden", Hyprlang::STRING{"follow"}));
     HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
@@ -1059,6 +1062,10 @@ bool getNavigatorEnabled() {
 
 bool getNavigatorAutoOpen() {
     return getValue<bool>("plugin:spatialoverview:navigator:auto_open");
+}
+
+bool getNavigatorHideOutlineInMotion() {
+    return getValue<bool>("plugin:spatialoverview:navigator:hide_outline_in_motion");
 }
 
 bool getNavigatorLabelDrag() {

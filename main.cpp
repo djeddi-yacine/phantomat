@@ -344,12 +344,22 @@ static void hkSurfaceFrame(void* thisptr, const Time::steady_tp& now) {
     original<origSurfaceFrame>(HOOK_SURFACE_FRAME)(thisptr, now);
 }
 
+// An offscreen buffer that is not the monitor's size (a transformed window's
+// canvas, a work buffer) has its own coordinates; canvas viewport clipping and
+// camera re-projection only make sense on monitor-sized targets.
+static bool drawsOffscreenCanvas(const Render::CRenderContext& ctx) {
+    const auto MONITOR = ctx.m_data.pMonitor.lock();
+    return ctx.m_data.renderingTransformedSource || (MONITOR && ctx.m_data.fbSize.x > 0 && ctx.m_data.fbSize != MONITOR->m_transformedSize);
+}
+
 static void hkDrawElement(void* thisptr, Render::CRenderContext& ctx, WP<IPassElement> element, const CRegion& damage) {
     const auto  ORIGINAL = original<origDrawElement>(HOOK_DRAW_ELEMENT);
     const auto* clip     = OverviewRender::canvasViewportClip;
     // Inside a transformed (e.g. wobbling) window's offscreen canvas the
     // coordinates are that canvas's, not the screen's: leave it to Hyprland.
-    if (!renderingOverview || !clip || !element || ctx.m_data.renderingTransformedSource) {
+    // Empty damage means "the whole target" to Hyprland (e.g. clearing a
+    // transformed window's canvas); clipping it would skip the draw.
+    if (!renderingOverview || !clip || !element || damage.empty() || drawsOffscreenCanvas(ctx)) {
         ORIGINAL(thisptr, ctx, element, damage);
         return;
     }
@@ -373,7 +383,7 @@ static void hkDrawElement(void* thisptr, Render::CRenderContext& ctx, WP<IPassEl
 static void hkDrawTex(void* thisptr, Render::CRenderContext& ctx, WP<CTexPassElement> element, const CRegion& damage) {
     const auto ORIGINAL    = original<origDrawTex>(HOOK_DRAW_TEX);
     auto&      renderModif = ctx.m_data.renderModif;
-    if (!renderingOverview || !element || !renderModif.enabled || renderModif.modifs.empty() || ctx.m_data.renderingTransformedSource) {
+    if (!renderingOverview || !element || !renderModif.enabled || renderModif.modifs.empty() || drawsOffscreenCanvas(ctx)) {
         ORIGINAL(thisptr, ctx, element, damage);
         return;
     }
@@ -424,7 +434,7 @@ static void hkElementDrawTex(void* thisptr, Render::CRenderContext& ctx, WP<CTex
     const auto ORIGINAL    = original<origDrawTex>(HOOK_ELEMENT_DRAW_TEX);
     auto&      renderModif = ctx.m_data.renderModif;
     if (!renderingOverview || !element || !renderModif.enabled || renderModif.modifs.empty() || !ctx.m_data.currentWindow || !element->m_data.surface ||
-        ctx.m_data.renderingTransformedSource) {
+        drawsOffscreenCanvas(ctx)) {
         ORIGINAL(thisptr, ctx, element, damage);
         return;
     }
