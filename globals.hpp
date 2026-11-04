@@ -6,6 +6,7 @@
 #include <hyprland/src/desktop/view/window/WindowBackend.hpp>
 #include <hyprland/src/desktop/view/window/WindowGroupMembership.hpp>
 #include <hyprland/src/desktop/view/window/WindowPresentation.hpp>
+#include <hyprland/src/desktop/view/window/X11Backend.hpp>
 
 #include <functional>
 
@@ -47,3 +48,16 @@ struct SPrivateMember {
         return MEMBER;
     }
 };
+
+// An X11 window's XWayland surface. CX11Backend keeps it private in 0.57.
+struct SX11SurfaceTag {
+    friend constexpr auto privateMember(SX11SurfaceTag);
+};
+template struct SPrivateMember<SX11SurfaceTag, &Desktop::View::CX11Backend::m_xwaylandSurface>;
+
+inline SP<CXWaylandSurface> windowX11Surface(const PHLWINDOW& window) {
+    if (!window || !window->backend().isX11())
+        return nullptr;
+    const auto* BACKEND = dc<const Desktop::View::CX11Backend*>(&window->backend());
+    return BACKEND ? (BACKEND->*privateMember(SX11SurfaceTag{})).lock() : nullptr;
+}

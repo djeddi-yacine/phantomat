@@ -29,6 +29,8 @@
 #include <hyprland/src/protocols/PointerConstraints.hpp>
 #include <hyprland/src/pointer/PointerController.hpp>
 #include <hyprland/src/event/EventBus.hpp>
+#include <hyprland/src/ipc/s2/S2.hpp>
+#include <hyprland/src/config/shared/actions/ConfigActions.hpp>
 #include <hyprland/src/animation/AnimationManager.hpp>
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
@@ -44,6 +46,7 @@
 #include <hyprland/src/pointer/cursor/CursorShapeOverrideController.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/view/Group.hpp>
+#include <hyprland/src/workspace/RegularWorkspace.hpp>
 #include <hyprland/src/desktop/view/window/Window.hpp>
 #include <hyprland/src/desktop/view/WLSurface.hpp>
 #include <hyprland/src/desktop/view/LayerSurface.hpp>
@@ -93,16 +96,31 @@ struct SScrollingDataTag {
 };
 template struct SPrivateMember<SScrollingDataTag, &Layout::Tiled::CScrollingAlgorithm::m_scrollingData>;
 
+struct SScrollingFocusTag {
+    friend constexpr auto privateMember(SScrollingFocusTag);
+};
+template struct SPrivateMember<SScrollingFocusTag, &Layout::Tiled::CScrollingAlgorithm::focusTargetUpdate>;
+
+struct SGroupVisibilityTag {
+    friend constexpr auto privateMember(SGroupVisibilityTag);
+};
+template struct SPrivateMember<SGroupVisibilityTag, &Desktop::View::CGroup::updateWindowVisibility>;
+
+static bool workspacePersistent(const PHLWORKSPACE& workspace) {
+    const auto* REGULAR = workspace ? dc<const Workspace::CRegularWorkspace*>(workspace.get()) : nullptr;
+    return REGULAR && REGULAR->isPersistent();
+}
+
 static const SP<Layout::Tiled::SScrollingData>& scrollingData(Layout::Tiled::CScrollingAlgorithm* algorithm) {
     static const SP<Layout::Tiled::SScrollingData> NONE;
     return algorithm ? algorithm->*privateMember(SScrollingDataTag{}) : NONE;
 }
 
-static bool layerAboveFullscreen(const PHLLS& layer) {
+static bool layerAboveFullscreen(const PHLLSREF& layer) {
     return layer && sc<bool>(layer->m_flags & Desktop::View::LAYER_FLAG_ABOVE_FULLSCREEN);
 }
 
-static void setLayerAboveFullscreen(const PHLLS& layer, bool above) {
+static void setLayerAboveFullscreen(const PHLLSREF& layer, bool above) {
     if (!layer)
         return;
     if (above)
@@ -296,7 +314,7 @@ static bool attachCanvasLayoutTarget(const PHLWINDOW& w) {
     if (!TARGET || !valid(WORKSPACE) || !WORKSPACE->space())
         return false;
     if (TARGET->space() != WORKSPACE->space() || !TARGET->space()->workspace()) {
-        Log::logger->log(Log::WARN, "[spatialoverview] re-attaching window {:x} to the layout of workspace {}", rc<uintptr_t>(w.get()), workspaceID(WORKSPACE));
+        Log::logger->log(Log::WARN, "spatialoverview", "re-attaching window {:x} to the layout of workspace {}", rc<uintptr_t>(w.get()), workspaceID(WORKSPACE));
         g_layoutManager->newTarget(TARGET, WORKSPACE->space());
     }
     const auto SPACE = TARGET->space();
@@ -507,38 +525,53 @@ static xkb_keysym_t getOverviewKeysym(const IKeyboard::SKeyEvent& event) {
 }
 
 static bool hasOverviewSubmap() {
-    return g_pKeybindManager && std::ranges::any_of(g_pKeybindManager->m_keybinds, [](const auto& keybind) { return keybind && keybind->submap.name == OVERVIEW_SUBMAP; });
+    return Keybinds::mgr() && Keybinds::mgr()->registry().hasSubmap(OVERVIEW_SUBMAP);
 }
 
 static bool isOverviewSubmapActive() {
-    return g_pKeybindManager && g_pKeybindManager->getCurrentSubmap().name == OVERVIEW_SUBMAP;
+    return Keybinds::mgr() && Keybinds::mgr()->currentSubmap() == OVERVIEW_SUBMAP;
+}
+
+// The bind for `key` that Hyprland would run now in the current submap.
+static Keybinds::PBind findActiveBind(std::string_view key, std::optional<std::string_view> submap = std::nullopt) {
+    if (!Keybinds::mgr() || !g_pInputManager)
+        return nullptr;
+
+    const auto MODS    = g_pInputManager->getModsFromAllKBs();
+    const auto CURRENT = Keybinds::mgr()->currentSubmap();
+    for (const auto& bind : Keybinds::mgr()->registry().binds()) {
+        if (!bind || !bind->enabled() || std::ranges::find(bind->keyNames(), key) == bind->keyNames().end())
+            continue;
+        if (bind->modifierMask() != MODS && !bind->hasFlag(Keybinds::BIND_FLAG_IGNORE_MODS))
+            continue;
+        const auto& BINDSUBMAP = bind->metadata().submap;
+        if (submap ? BINDSUBMAP == *submap : (BINDSUBMAP == CURRENT || bind->hasFlag(Keybinds::BIND_FLAG_SUBMAP_UNIVERSAL)))
+            return bind;
+    }
+    return nullptr;
 }
 
 static bool hasApplicableScrollKeybind(const IPointer::SAxisEvent& event) {
-    if (!g_pKeybindManager || !g_pInputManager || event.source != WL_POINTER_AXIS_SOURCE_WHEEL || event.delta == 0.0)
+    if (event.source != WL_POINTER_AXIS_SOURCE_WHEEL || event.delta == 0.0)
         return false;
 
-    std::string key;
     if (event.axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
-        key = event.delta > 0 ? "mouse_down" : "mouse_up";
-    else if (event.axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL)
-        key = event.delta < 0 ? "mouse_left" : "mouse_right";
-    else
-        return false;
-
-    const auto MODS   = g_pInputManager->getModsFromAllKBs();
-    const auto SUBMAP = g_pKeybindManager->getCurrentSubmap();
-    return std::ranges::any_of(g_pKeybindManager->m_keybinds, [&](const auto& keybind) {
-        return keybind && keybind->enabled && !keybind->shadowed && keybind->key == key && (keybind->modmask == MODS || keybind->ignoreMods) &&
-            (keybind->submap.name == SUBMAP.name || keybind->submapUniversal);
-    });
+        return findActiveBind(event.delta > 0 ? "mouse_down" : "mouse_up") != nullptr;
+    if (event.axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL)
+        return findActiveBind(event.delta < 0 ? "mouse_left" : "mouse_right") != nullptr;
+    return false;
 }
 
+struct SScrollTimerTag {
+    friend constexpr auto privateMember(SScrollTimerTag);
+};
+template struct SPrivateMember<SScrollTimerTag, &Keybinds::CKeybindManager::m_scrollTimer>;
+
 static bool scrollKeybindIsThrottled() {
-    if (!g_pKeybindManager)
+    if (!Keybinds::mgr())
         return false;
 
-    return g_pKeybindManager->m_scrollTimer.getMillis() < ScrollOverview::Config::getValue<int>("binds:scroll_event_delay");
+    return ((*Keybinds::mgr()).*privateMember(SScrollTimerTag{})).getMillis() < ScrollOverview::Config::getValue<int>("binds:scroll_event_delay");
 }
 
 static bool isTopLayerFocused(PHLMONITOR monitor) {
@@ -707,9 +740,9 @@ static bool windowHasOverviewAnimation(const PHLWINDOW& window) {
     if (!window)
         return false;
 
-    return window->positionAnimation()->isBeingAnimated() || window->sizeAnimation()->isBeingAnimated() || window->alpha().isBeingAnimated() ||
-        window->m_borderFadeAnimationProgress->isBeingAnimated() || window->m_borderAngleAnimationProgress->isBeingAnimated() || window->m_dimPercent->isBeingAnimated() ||
-        window->m_shadowFadeAnimationProgress->isBeingAnimated();
+    // Previews draw their own borders and shadows, so only geometry and opacity
+    // animations need live frames.
+    return window->positionAnimation()->isBeingAnimated() || window->sizeAnimation()->isBeingAnimated() || window->alpha().isBeingAnimated();
 }
 
 static bool layerHasOverviewAnimation(const PHLLS& layer) {
@@ -1473,7 +1506,7 @@ static bool moveOverviewScrollingTargetToWorkspaceEdge(const SP<Layout::ITarget>
     NEW_COL->add(TDATA);
     scrollingData(ALGO)->centerOrFitCol(NEW_COL);
     scrollingData(ALGO)->recalculate();
-    ALGO->focusTargetUpdate(target);
+    (ALGO->*privateMember(SScrollingFocusTag{}))(target);
 
     return true;
 }
@@ -1514,7 +1547,7 @@ static bool moveOverviewScrollingTargetNextToWindow(const SP<Layout::ITarget>& t
         NEW_COL->add(TDATA);
         scrollingData(ALGO)->centerOrFitCol(NEW_COL);
         scrollingData(ALGO)->recalculate();
-        ALGO->focusTargetUpdate(target);
+        (ALGO->*privateMember(SScrollingFocusTag{}))(target);
 
         return true;
     }
@@ -1530,7 +1563,7 @@ static bool moveOverviewScrollingTargetNextToWindow(const SP<Layout::ITarget>& t
     ANCHOR_COL->add(TDATA, INSERT_AFTER);
     scrollingData(ALGO)->centerOrFitCol(ANCHOR_COL);
     scrollingData(ALGO)->recalculate();
-    ALGO->focusTargetUpdate(target);
+    (ALGO->*privateMember(SScrollingFocusTag{}))(target);
 
     return true;
 }
@@ -2546,9 +2579,9 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
             return;
 
         // Explicit compositor submaps (such as group controls) own their plain keys too.
-        if (workspaceBoundCanvas && g_pKeybindManager) {
-            const auto SUBMAP = g_pKeybindManager->getCurrentSubmap();
-            if (!SUBMAP.name.empty() && SUBMAP.name != "reset")
+        if (workspaceBoundCanvas && Keybinds::mgr()) {
+            const auto SUBMAP = Keybinds::mgr()->currentSubmap();
+            if (!SUBMAP.empty() && SUBMAP != "reset")
                 return;
         }
 
@@ -2660,7 +2693,7 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     windowMoveHook      = Event::bus()->m_events.window.moveToWorkspace.listen(onWindowMove);
     windowActiveHook    = Event::bus()->m_events.window.active.listen(onWindowActive);
     windowFullscreenHook = Event::bus()->m_events.window.fullscreen.listen(onWindowFullscreen);
-    workspaceCreatedHook = Event::bus()->m_events.workspace.created.listen(onWorkspaceLifecycle);
+    workspaceCreatedHook = Event::bus()->m_events.workspace.createdLate.listen(onWorkspaceLifecycle);
     workspaceRemovedHook = Event::bus()->m_events.workspace.removed.listen(onWorkspaceLifecycle);
     activateSubmapIfConfigured();
     if (isCanvasDesktop() || !usesSubmapKeybinds)
@@ -3883,7 +3916,7 @@ struct SX11Sync {
 static std::unordered_map<const Desktop::View::CWindow*, SX11Sync> g_x11Sync;
 
 static bool canvasManagesX11(const PHLWINDOW& window) {
-    return window && window->backend().isX11() && !window->backend().traits().overrideRedirect && window->m_xwaylandSurface && shouldShowOverviewWindow(window) && !windowPinned(window);
+    return window && window->backend().isX11() && !window->backend().traits().overrideRedirect && windowX11Surface(window) && shouldShowOverviewWindow(window) && !windowPinned(window);
 }
 
 static SX11Sync* x11Sync(const PHLWINDOW& window, bool create) {
@@ -3981,7 +4014,7 @@ void CScrollOverview::canvasClaimX11Window(const PHLWINDOW& window) {
 CBox canvasX11Configure(void* surface, const CBox& box) {
     PHLWINDOW window;
     for (const auto& w : Desktop::windowState()->windows()) {
-        if (w && w->backend().isX11() && w->m_xwaylandSurface.get() == surface) {
+        if (w && windowX11Surface(w).get() == surface) {
             window = w;
             break;
         }
@@ -4025,7 +4058,7 @@ CBox canvasX11Request(void* windowPtr, CBox box) {
     // A game going borderless fullscreen first asks to cover its monitor
     // exactly: that is the screen it means (see canvasScreenOf).
     const auto SYNCED = IT->second.window.lock();
-    const CBox SCREEN{SYNCED->xwaylandPositionToReal(box.pos()), SYNCED->xwaylandSizeToReal(box.size())};
+    const CBox SCREEN = SYNCED->backend().clientToLogical(box, SYNCED->m_monitor.lock());
     IT->second.covers.reset();
     for (const auto& monitor : State::monitorState()->monitors()) {
         const auto MONITORBOX = monitor ? monitor->logicalBox() : CBox{};
@@ -4260,7 +4293,7 @@ static void canvasPlaceAfterFullscreen(const SCanvasFullscreen& entry, CScrollOv
     // Back from fullscreen: an X11 app gets what it asked for meanwhile, on
     // the screen as the canvas shows it.
     if (entry.request) {
-        const CBox SCREEN{WINDOW->xwaylandPositionToReal(entry.request->pos()), WINDOW->xwaylandSizeToReal(entry.request->size())};
+        const CBox SCREEN = WINDOW->backend().clientToLogical(*entry.request, WINDOW->m_monitor.lock());
         if (const auto WORLD = canvas->canvasScreenToWorld(SCREEN)) {
             TARGET->rememberFloatingSize(SCREEN.size());
             TARGET->setPositionGlobal(CBox{WORLD->pos(), SCREEN.size()});
@@ -5341,7 +5374,7 @@ void CScrollOverview::forwardCanvasPointerMotion(uint32_t timeMs) {
         // its native coordinates, including Hyprland's force-zero scaling.
         if (WINDOW->backend().isX11()) {
             SURFACE      = WINDOW->wlSurface()->resource();
-            SURFACELOCAL = WINDOWLOCAL * WINDOW->m_X11SurfaceScaledBy;
+            SURFACELOCAL = WINDOWLOCAL * WINDOW->backend().surfaceScale();
         } else if (canvasForwardedPointerButtons.empty())
             SURFACE = Desktop::viewState()->hitTest().windowSurfaceAt(WORLDPOINT, WINDOW, SURFACELOCAL);
         else if (SURFACE)
@@ -7317,7 +7350,7 @@ void CScrollOverview::restoreForcedWindowVisibility() {
 
     for (const auto& group : groupsToRefresh) {
         if (group)
-            group->updateWindowVisibility();
+            (group.get()->*privateMember(SGroupVisibilityTag{}))();
     }
 
     forcedWindowVisibility.clear();
@@ -7527,16 +7560,16 @@ void CScrollOverview::emitFullscreenVisibilityState(PHLWINDOW window, bool hideF
     window = getOverviewWindowToShow(window);
 
     if (!validMapped(window) || !window->m_workspace || window->m_monitor != pMonitor) {
-        if (g_pEventManager)
-            g_pEventManager->postEvent(SHyprIPCEvent{.event = "fullscreen", .data = "0"});
+        if (IPC::Socket2::sock())
+            IPC::Socket2::sock()->postEvent({.event = "fullscreen", .data = "0"});
         return;
     }
 
     if (!hideFullscreen || !Fullscreen::controller()->isFullscreen(window)) {
         Event::bus()->m_events.window.fullscreen.emit(window);
 
-        if (g_pEventManager)
-            g_pEventManager->postEvent(SHyprIPCEvent{.event = "fullscreen", .data = Fullscreen::controller()->isFullscreen(window) ? "1" : "0"});
+        if (IPC::Socket2::sock())
+            IPC::Socket2::sock()->postEvent({.event = "fullscreen", .data = Fullscreen::controller()->isFullscreen(window) ? "1" : "0"});
 
         return;
     }
@@ -7547,8 +7580,8 @@ void CScrollOverview::emitFullscreenVisibilityState(PHLWINDOW window, bool hideF
 
     Event::bus()->m_events.window.fullscreen.emit(window);
 
-    if (g_pEventManager)
-        g_pEventManager->postEvent(SHyprIPCEvent{.event = "fullscreen", .data = "0"});
+    if (IPC::Socket2::sock())
+        IPC::Socket2::sock()->postEvent({.event = "fullscreen", .data = "0"});
 
     Fullscreen::controller()->setFullscreenMode(window, SAVEDMODES.internal, SAVEDMODES.client);
 }
@@ -7670,14 +7703,14 @@ void CScrollOverview::renderWorkspaceLive(Render::CRenderContext& ctx, PHLMONITO
     };
 
     if (!scrollingLayout && hasFullscreenPath) {
-        renderOverviewWindow(ctx, fullscreenWindow);
+        renderOverviewWindow(fullscreenWindow);
         OverviewRender::flushPass(ctx, monitor);
         for (const auto& windowRef : workspaceImage->windows) {
             const auto window = getOverviewWindowToShow(windowRef.lock());
             if (!shouldShowOverviewWindow(window) || !window->isFloating() || window == fullscreenWindow)
                 continue;
 
-            renderOverviewWindow(ctx, window);
+            renderOverviewWindow(window);
         }
         renderDropIndicator();
         return;
@@ -7689,7 +7722,7 @@ void CScrollOverview::renderWorkspaceLive(Render::CRenderContext& ctx, PHLMONITO
             if (!window || window->isFloating() != floating)
                 continue;
 
-            renderOverviewWindow(ctx, window);
+            renderOverviewWindow(window);
         }
     };
 
@@ -9587,7 +9620,7 @@ void CScrollOverview::onWorkspaceChange() {
     const bool INSERTEDWORKSPACE = std::find(previousWorkspaceIDs.begin(), previousWorkspaceIDs.end(), workspaceID(NEWWORKSPACE)) == previousWorkspaceIDs.end();
     const auto REQUESTEDREMOVEDWORKSPACE = pendingRemovedWorkspace.lock();
     const bool SHOULDREMOVEPREVIOUSWORKSPACE =
-        previousStartedOn && previousStartedOn != NEWWORKSPACE && !isSpecialWorkspace(previousStartedOn) && !previousStartedOn->isPersistent() && previousStartedOn->getWindowCount() == 0;
+        previousStartedOn && previousStartedOn != NEWWORKSPACE && !isSpecialWorkspace(previousStartedOn) && !workspacePersistent(previousStartedOn) && previousStartedOn->getWindowCount() == 0;
     const auto REMOVEDWORKSPACE = REQUESTEDREMOVEDWORKSPACE ? REQUESTEDREMOVEDWORKSPACE : SHOULDREMOVEPREVIOUSWORKSPACE ? previousStartedOn : PHLWORKSPACE{};
 
     pendingRemovedWorkspace = REMOVEDWORKSPACE;
@@ -9690,7 +9723,7 @@ void CScrollOverview::renderWorkspaceTransition(Render::CRenderContext& ctx) {
     SpatialOverview::BarrelShader::updateUniforms(0.F);
     const bool previousBlockFeedback = ctx.m_blockSurfaceFeedback;
     ctx.m_blockSurfaceFeedback = true;
-    auto restoreFeedback = Hyprutils::Utils::CScopeGuard([previousBlockFeedback] {
+    auto restoreFeedback = Hyprutils::Utils::CScopeGuard([&ctx, previousBlockFeedback] {
         ctx.m_blockSurfaceFeedback = previousBlockFeedback;
     });
 
@@ -9721,7 +9754,7 @@ void CScrollOverview::render(Render::CRenderContext& ctx) {
 
     const bool PREVBLOCKSURFACEFEEDBACK       = ctx.m_blockSurfaceFeedback;
     ctx.m_blockSurfaceFeedback  = true;
-    auto restoreSurfaceFeedback               = Hyprutils::Utils::CScopeGuard([PREVBLOCKSURFACEFEEDBACK] { ctx.m_blockSurfaceFeedback = PREVBLOCKSURFACEFEEDBACK; });
+    auto restoreSurfaceFeedback               = Hyprutils::Utils::CScopeGuard([&ctx, PREVBLOCKSURFACEFEEDBACK] { ctx.m_blockSurfaceFeedback = PREVBLOCKSURFACEFEEDBACK; });
 
     const auto NOW       = Time::steadyNow();
     const auto ACTIVEIDX = activeWorkspaceIndex();
@@ -9761,7 +9794,7 @@ void CScrollOverview::render(Render::CRenderContext& ctx) {
     if (BLURALPHA > 0.001F && backdropBlurFB && backdropBlurFB->isAllocated() && backdropBlurFB->getTexture())
         renderBackdropBlurCache(ctx, MONITOR, BLURALPHA, BACKDROP);
 
-    Event::bus()->m_events.render.stage.emit(RENDER_POST_WALLPAPER);
+    Event::bus()->m_events.render.stage.emit(Event::SRenderStageEvent{.stage = RENDER_POST_WALLPAPER, .monitor = MONITOR, .context = std::ref(ctx)});
 
     if (isCanvasDesktop()) {
         renderCanvasBackgroundDim(ctx, MONITOR);
@@ -9897,19 +9930,11 @@ void CScrollOverview::releaseInputListeners() {
 }
 
 void CScrollOverview::activateSubmapIfConfigured() {
-    if (!sharedStateOwner || !usesSubmapKeybinds || !g_pKeybindManager)
+    if (!sharedStateOwner || !usesSubmapKeybinds || !Keybinds::mgr())
         return;
 
-    previousSubmapName = g_pKeybindManager->getCurrentSubmap().name;
-
-    const auto DISPATCHER = g_pKeybindManager->m_dispatchers.find("submap");
-    if (DISPATCHER == g_pKeybindManager->m_dispatchers.end()) {
-        usesSubmapKeybinds = false;
-        return;
-    }
-
-    const auto RESULT = DISPATCHER->second(OVERVIEW_SUBMAP);
-    if (!RESULT.success) {
+    previousSubmapName = std::string{Keybinds::mgr()->currentSubmap()};
+    if (!Config::Actions::setSubmap(OVERVIEW_SUBMAP)) {
         usesSubmapKeybinds = false;
         return;
     }
@@ -9918,48 +9943,24 @@ void CScrollOverview::activateSubmapIfConfigured() {
 }
 
 void CScrollOverview::restoreSubmapIfActive() {
-    if (!submapActive || !g_pKeybindManager)
+    if (!submapActive || !Keybinds::mgr())
         return;
 
-    const auto CURRENT = g_pKeybindManager->getCurrentSubmap().name;
-    if (CURRENT == OVERVIEW_SUBMAP) {
-        const auto DISPATCHER = g_pKeybindManager->m_dispatchers.find("submap");
-        if (DISPATCHER != g_pKeybindManager->m_dispatchers.end())
-            DISPATCHER->second(previousSubmapName.empty() ? "reset" : previousSubmapName);
-    }
+    if (Keybinds::mgr()->currentSubmap() == OVERVIEW_SUBMAP)
+        Config::Actions::setSubmap(previousSubmapName.empty() ? "reset" : previousSubmapName);
 
     submapActive = false;
 }
 
 bool CScrollOverview::dispatchSubmapMouseClick(uint32_t button) {
-    if (!usesSubmapKeybinds || !isOverviewSubmapActive() || !g_pKeybindManager || !g_pInputManager)
+    if (!usesSubmapKeybinds || !isOverviewSubmapActive())
         return false;
 
-    const auto KEYNAME = "mouse:" + std::to_string(button);
-    const auto MODS    = g_pInputManager->getModsFromAllKBs();
-
-    const auto KEYBIND = std::ranges::find_if(g_pKeybindManager->m_keybinds, [&](const auto& keybind) {
-        return keybind && keybind->enabled && !keybind->shadowed && keybind->key == KEYNAME && keybind->submap.name == OVERVIEW_SUBMAP &&
-            (keybind->modmask == MODS || keybind->ignoreMods);
-    });
-
-    if (KEYBIND == g_pKeybindManager->m_keybinds.end())
+    const auto BIND = findActiveBind("mouse:" + std::to_string(button), std::string_view{OVERVIEW_SUBMAP});
+    if (!BIND)
         return false;
 
-    const auto DISPATCHERNAME = (*KEYBIND)->mouse ? "mouse" : (*KEYBIND)->handler;
-    const auto DISPATCHER     = g_pKeybindManager->m_dispatchers.find(DISPATCHERNAME);
-    if (DISPATCHER == g_pKeybindManager->m_dispatchers.end())
-        return false;
-
-    const auto PREVIOUSKEYBIND = g_pKeybindManager->m_currentKeybind;
-    g_pKeybindManager->m_currentKeybind = *KEYBIND;
-    auto restoreKeybind = Hyprutils::Utils::CScopeGuard([PREVIOUSKEYBIND] { g_pKeybindManager->m_currentKeybind = PREVIOUSKEYBIND; });
-
-    const int PREVIOUSPASSPRESSED = Config::Actions::state()->m_passPressed;
-    Config::Actions::state()->m_passPressed = 0;
-    auto restorePassPressed = Hyprutils::Utils::CScopeGuard([PREVIOUSPASSPRESSED] { Config::Actions::state()->m_passPressed = PREVIOUSPASSPRESSED; });
-
-    DISPATCHER->second((*KEYBIND)->mouse ? "0" + (*KEYBIND)->arg : (*KEYBIND)->arg);
+    BIND->invoke();
     return true;
 }
 
@@ -11072,7 +11073,7 @@ void CScrollOverview::updateExperimentDrag() {
     damage();
 }
 
-static void drawCanvasText(const std::string& text, const CBox& box, const CHyprColor& color, int points) {
+static void drawCanvasText(Render::CRenderContext& ctx, const std::string& text, const CBox& box, const CHyprColor& color, int points) {
     if (text.empty() || box.width < 4.F || box.height < 4.F || color.a <= 0.01F)
         return;
     auto texture = g_pHyprRenderer->renderText(text, color, std::max(points, 1), false, "", std::max(1, sc<int>(std::round(box.width))));
@@ -11115,7 +11116,7 @@ void CScrollOverview::renderExperimentChrome(Render::CRenderContext& ctx, PHLMON
             arm(CBox{FRAME.x, FRAME.y + FRAME.height - ARM, THICK, ARM});
             arm(CBox{FRAME.x + FRAME.width - ARM, FRAME.y + FRAME.height - THICK, ARM, THICK});
             arm(CBox{FRAME.x + FRAME.width - THICK, FRAME.y + FRAME.height - ARM, THICK, ARM});
-            drawCanvasText("100%", CBox{FRAME.x + 8.F * SCALE, FRAME.y + 6.F * SCALE, 80.F * SCALE, 16.F * SCALE}, color, sc<int>(std::round(12.F * SCALE)));
+            drawCanvasText(ctx, "100%", CBox{FRAME.x + 8.F * SCALE, FRAME.y + 6.F * SCALE, 80.F * SCALE, 16.F * SCALE}, color, sc<int>(std::round(12.F * SCALE)));
         }
     }
 
@@ -11153,7 +11154,7 @@ void CScrollOverview::renderExperimentChrome(Render::CRenderContext& ctx, PHLMON
         border.outerRound = border.round;
         border.roundingPower = 2.F;
         Render::IHyprRenderer::addPassElement(ctx, makeUnique<CBorderPassElement>(border));
-        drawCanvasText(names[id], CBox{box.x, std::max(0.F, sc<float>(box.y - 18.F * SCALE)), 160.F * SCALE, 16.F * SCALE},
+        drawCanvasText(ctx, names[id], CBox{box.x, std::max(0.F, sc<float>(box.y - 18.F * SCALE)), 160.F * SCALE, 16.F * SCALE},
                        CHyprColor{0.7F, 0.88F, 1.F, 0.9F * overviewProgress()}, sc<int>(std::round(12.F * SCALE)));
     }
 }
@@ -11432,7 +11433,7 @@ void CScrollOverview::renderNavigatorHud(Render::CRenderContext& ctx, PHLMONITOR
     for (const auto& region : chrome.regions)
         regions.push_back({.screen = {sc<float>(region.screen.x), sc<float>(region.screen.y), sc<float>(region.screen.width), sc<float>(region.screen.height)},
                            .uv     = region.uv});
-    if (!workspaceBoundCanvas && SpatialOverview::BarrelShader::updateHud(texture, {sc<float>(box.x), sc<float>(box.y), sc<float>(box.width), sc<float>(box.height)}, OPACITY, chrome.texture,
+    if (!workspaceBoundCanvas && SpatialOverview::BarrelShader::updateHud(ctx, texture, {sc<float>(box.x), sc<float>(box.y), sc<float>(box.width), sc<float>(box.height)}, OPACITY, chrome.texture,
                                                                          regions))
         return;
 
@@ -11592,7 +11593,7 @@ bool CScrollOverview::flightDeckAction(const std::string& action) {
     }
     if (action.starts_with("area ")) {
         int id=0; try { id=std::stoi(action.substr(5)); } catch (...) { return false; }
-        const auto ws = State::workspaceState()->query().id(id).run();
+        const auto ws = (id > 0 ? State::workspaceState()->query().numbered(Workspace::SWorkspaceNumberedID{sc<Workspace::WorkspaceIDContainer>(id)}).run() : PHLWORKSPACE{});
         if (!ws || isSpecialWorkspace(ws)) return false;
         if (workspaceBoundCanvas && ws != startedOn) return false;
         for (const auto& w : Desktop::windowState()->windows())

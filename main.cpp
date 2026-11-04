@@ -111,7 +111,7 @@ bool ensureScrollOverviewHooks() {
             return true;
 
         failedHook = name;
-        Log::logger->log(Log::ERR, "[spatialoverview] failed to enable overview hook: {}", name);
+        Log::logger->log(Log::ERR, "spatialoverview", "failed to enable overview hook: {}", name);
         return false;
     };
 
@@ -576,8 +576,8 @@ static void hkX11ClientMessage(void* thisptr, xcb_client_message_event_t* e) {
 
     SP<CXWaylandSurface> surface;
     for (const auto& window : Desktop::windowState()->windows()) {
-        if (window && window->backend().isX11() && window->m_xwaylandSurface && window->m_xwaylandSurface->m_xID == e->window) {
-            surface = window->m_xwaylandSurface.lock();
+        if (window && windowX11Surface(window) && windowX11Surface(window)->m_xID == e->window) {
+            surface = windowX11Surface(window);
             break;
         }
     }
@@ -683,14 +683,14 @@ static bool openOverview(PHLMONITOR monitor, bool workspaceBoundCanvas = false) 
     if (const auto retained = workspaceBoundCanvas ? workspaceTransitionOverviewFor(monitor, monitor->m_activeWorkspace) : SP<IOverview>{}) {
         registerScrollOverview(retained);
         static_cast<CScrollOverview*>(retained.get())->resumeAfterWorkspaceSwitch();
-        Log::logger->log(Log::DEBUG, "[spatialoverview] resumed workspace Canvas {}", workspaceID(monitor->m_activeWorkspace));
+        Log::logger->log(Log::DEBUG, "spatialoverview", "resumed workspace Canvas {}", workspaceID(monitor->m_activeWorkspace));
     } else {
         auto overview = makeShared<CScrollOverview>(monitor->m_activeWorkspace, false, monitor, workspaceBoundCanvas);
         registerScrollOverview(overview);
         if (workspaceBoundCanvas)
             overview->restoreWorkspaceOverview();
         if (workspaceBoundCanvas)
-            Log::logger->log(Log::DEBUG, "[spatialoverview] created workspace Canvas {}", workspaceID(monitor->m_activeWorkspace));
+            Log::logger->log(Log::DEBUG, "spatialoverview", "created workspace Canvas {}", workspaceID(monitor->m_activeWorkspace));
     }
     renderingOverview = PREVRENDERINGOVERVIEW;
     canvasReclaimScreen(monitor);
@@ -1271,7 +1271,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_pX11ClientMessageHook = HyprlandAPI::createFunctionHook(SCROLLOVERVIEW_HANDLE, findFnOrThrow("handleClientMessage", {"CXWM::handleClientMessage("}),
                                                               rc<void*>(hkX11ClientMessage));
     if (!g_pX11ClientMessageHook || !g_pX11ClientMessageHook->hook())
-        Log::logger->log(Log::WARN, "[spatialoverview] could not hook X11 client messages; X11 apps flashing for attention may leave fullscreen");
+        Log::logger->log(Log::WARN, "spatialoverview", "could not hook X11 client messages; X11 apps flashing for attention may leave fullscreen");
 
     // Popups of canvas windows are kept on screen as the canvas shows them.
     g_pPopupRepositionHook = HyprlandAPI::createFunctionHook(SCROLLOVERVIEW_HANDLE, findFnOrThrow("reposition", {"Desktop::View::CPopup::reposition()"}),
