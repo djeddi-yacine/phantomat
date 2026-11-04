@@ -249,6 +249,7 @@ class CScrollOverview : public IOverview {
     Vector2D     canvasCellAtOverviewPoint(const Vector2D& point) const;
     CBox         snapCanvasWindowBox(const CBox& box, PHLMONITOR monitor) const;
     Vector2D  overviewPointToGlobal(size_t workspaceIdx, const Vector2D& pointLocal) const;
+    void      feedCanvasDragWobble();
     std::optional<CBox> canvasDragWorldBox(size_t workspaceIdx, const Vector2D& pointLocal) const;
     CBox      draggedWindowBox(size_t workspaceIdx) const;
     CBox      draggedWindowBoxFor(PHLWINDOW window, size_t workspaceIdx, const Vector2D& pointLocal, const Vector2D& grabRatio) const;
@@ -354,6 +355,7 @@ class CScrollOverview : public IOverview {
     Vector2D                         resizeLastMouseLocal  = Vector2D{};
     Vector2D                         scrollingPanLastMouseLocal = Vector2D{};
     CBox                             dragOriginalBox            = CBox{};
+    CBox                             dragWobbleBox              = CBox{}; // last on-screen preview box reported to the wobble effect
     CBox                             dragOriginalVisualBox      = CBox{};
     CBox                             dragOriginalOverviewBox    = CBox{};
     CBox                             dragOriginalOverviewHitbox = CBox{};

@@ -48,6 +48,7 @@
 #include <hyprland/src/desktop/view/Group.hpp>
 #include <hyprland/src/workspace/RegularWorkspace.hpp>
 #include <hyprland/src/layout/target/WindowTarget.hpp>
+#include <hyprland/src/desktop/view/window/WindowEffectsController.hpp>
 #include <hyprutils/string/String.hpp>
 #include <hyprland/src/desktop/view/window/Window.hpp>
 #include <hyprland/src/desktop/view/WLSurface.hpp>
@@ -6041,6 +6042,7 @@ void CScrollOverview::beginWindowDrag(PHLWINDOW window) {
     dragOriginalVisualBox         = WINDOW->grouping().group() ? TARGET->position() : WINDOW->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
     dragOriginalOverviewBox       = CBox{};
     dragOriginalOverviewHitbox    = CBox{};
+    dragWobbleBox                 = CBox{};
     dragActiveWindow              = WINDOW;
 
     const auto MONITOR = pMonitor.lock();
@@ -6090,9 +6092,32 @@ void CScrollOverview::beginWindowResize() {
     updateWindowResize();
 }
 
+// Hyprland's wobble (decoration:wobble) bends a window from the motion its own
+// drag controller reports. A canvas drag moves only the preview, so report
+// the preview's on-screen box instead; the transformer then bends the preview
+// around the grab point, and after the drop it settles where the client landed.
+void CScrollOverview::feedCanvasDragWobble() {
+    const auto WINDOW  = getOverviewWindowToShow(dragActiveWindow.lock());
+    const auto MONITOR = pMonitor.lock();
+    if (!WINDOW || !MONITOR || !isCanvasDesktop())
+        return;
+
+    const auto LOCAL = draggedWindowBox(dragWorkspaceIndex(WINDOW));
+    if (LOCAL.empty())
+        return;
+
+    const double SCALE  = std::max(sc<double>(MONITOR->m_scale), 0.01);
+    const CBox   SCREEN = {MONITOR->m_position + LOCAL.pos() / SCALE, LOCAL.size() / SCALE};
+    if (!dragWobbleBox.empty() && SCREEN != dragWobbleBox)
+        WINDOW->effects().onPositionUpdate(dragWobbleBox, SCREEN, Desktop::View::WINDOW_UPDATE_MOUSE);
+    dragWobbleBox = SCREEN;
+}
+
 void CScrollOverview::updateWindowDrag() {
     if (!dragActiveWindow)
         return;
+
+    feedCanvasDragWobble();
 
     for (const auto& overview : scrollOverviews()) {
         if (!overview)
