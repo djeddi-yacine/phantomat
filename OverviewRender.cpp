@@ -9,6 +9,27 @@ namespace OverviewRender {
 
 const CBox* canvasViewportClip = nullptr;
 
+namespace {
+    struct SRendererAccess : Render::IHyprRenderer {
+        using IHyprRenderer::renderBackground;
+        using IHyprRenderer::renderLayer;
+        using IHyprRenderer::renderWindow;
+    };
+}
+
+void queueWindow(Render::CRenderContext& ctx, const PHLWINDOW& window, const PHLMONITOR& monitor, const Time::steady_tp& now) {
+    (g_pHyprRenderer.get()->*(&SRendererAccess::renderWindow))(ctx, window, monitor, window->presentation().renderPresentation(), now, false, Render::RENDER_PASS_ALL,
+                                                             false, false);
+}
+
+void queueLayer(Render::CRenderContext& ctx, const PHLLS& layer, const PHLMONITOR& monitor, const Time::steady_tp& now, bool popups) {
+    (g_pHyprRenderer.get()->*(&SRendererAccess::renderLayer))(ctx, layer, monitor, now, popups, false, false);
+}
+
+void queueBackground(Render::CRenderContext& ctx, const PHLMONITOR& monitor) {
+    (g_pHyprRenderer.get()->*(&SRendererAccess::renderBackground))(ctx, monitor);
+}
+
 void flushPass(Render::CRenderContext& ctx, PHLMONITOR monitor) {
     if (!monitor || Render::IHyprRenderer::currentPass(ctx).empty())
         return;

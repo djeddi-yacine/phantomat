@@ -75,14 +75,6 @@ static auto& capturedPassElements(Render::CRenderPass& pass) {
     return pass.*privateMember(SPassElementsTag{});
 }
 
-// IHyprRenderer::renderWindow is protected; a derived type may name it.
-struct SRendererAccess : Render::IHyprRenderer {
-    static void queueWindow(Render::CRenderContext& ctx, const PHLWINDOW& window, const PHLMONITOR& monitor, const Time::steady_tp& now) {
-        (g_pHyprRenderer.get()->*(&SRendererAccess::renderWindow))(ctx, window, monitor, window->presentation().renderPresentation(), now, false,
-                                                                                   Render::RENDER_PASS_ALL, false, false);
-    }
-};
-
 static PHLWINDOW getOverviewWindowToShow(const PHLWINDOW& window) {
     if (!window)
         return nullptr;
@@ -759,7 +751,7 @@ void renderOverviewWindow(Render::CRenderContext& ctx, const SRenderParams& para
     Render::CRenderPass windowPass;
     {
         auto redirect = Render::IHyprRenderer::redirectPass(ctx, &windowPass);
-        SRendererAccess::queueWindow(ctx, params.window, params.monitor, params.now);
+        OverviewRender::queueWindow(ctx, params.window, params.monitor, params.now);
     }
     if (!cameraTransform) {
         const Vector2D targetWindowPosition = params.monitor->m_position + params.windowBox.pos() / params.monitor->m_scale;

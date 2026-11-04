@@ -3,6 +3,7 @@
 #include "globals.hpp"
 #include <hyprland/src/desktop/DesktopTypes.hpp>
 #include <hyprland/src/helpers/time/Time.hpp>
+#include <hyprland/src/input/Keys.hpp>
 
 #include <cstdint>
 #include <functional>
@@ -106,7 +107,7 @@ namespace SpatialOverview::Navigator {
     struct SRepeatKey {
         uint32_t    keycode = 0;
         uint32_t    keysym  = 0;
-        uint32_t    mods    = 0;
+        Input::ModifierMask    mods    = Input::HL_MODIFIER_NONE;
         std::string text;
     };
     void             startRepeat(const SRepeatKey& key, int delayMs, int rateHz, std::function<void(const SRepeatKey&)> handler);
