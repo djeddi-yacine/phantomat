@@ -7,6 +7,7 @@
 #include <hyprland/src/desktop/view/window/WindowGroupMembership.hpp>
 #include <hyprland/src/desktop/view/window/WindowPresentation.hpp>
 #include <hyprland/src/desktop/view/window/X11Backend.hpp>
+#include <hyprland/src/desktop/view/window/WindowFullscreenPolicy.hpp>
 
 #include <functional>
 

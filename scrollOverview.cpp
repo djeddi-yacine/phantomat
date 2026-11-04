@@ -177,6 +177,7 @@ struct SCanvasSavedWindow {
     CBox box;
     bool floating;
     Fullscreen::SFullscreenMode fullscreen;
+    bool fullscreenRequestsSuppressed = false; // the window rule's choice, restored on release
 };
 static std::unordered_map<uint64_t, SCanvasSavedWindow> g_canvasNativeLayout;
 struct SCanvasSpatialWindow {
@@ -299,8 +300,19 @@ static wl_event_source* g_canvasMemoryTimer       = nullptr;
 extern void requestFlightDeckNative(PHLWINDOW window, Fullscreen::eFullscreenMode mode);
 void        canvasReleaseX11Windows();
 
+// X11 apps re-send _NET_WM_STATE fullscreen; a canvas client is only made
+// fullscreen by the user, so its own requests are suppressed while managed.
+static void setCanvasFullscreenRequestSuppression(const PHLWINDOW& w, bool suppressed) {
+    if (!w || !w->backend().isX11())
+        return;
+    auto suppression       = w->fullscreenPolicy().requestSuppression();
+    suppression.fullscreen = suppressed;
+    w->fullscreenPolicy().setRequestSuppression(suppression);
+}
+
 static SCanvasSavedWindow saveCanvasWindow(PHLWINDOW w) {
-    return {w, w->m_workspace, w->layoutTarget()->position(), w->layoutTarget()->floating(), Fullscreen::controller()->getFullscreenModes(w)};
+    return {w, w->m_workspace, w->layoutTarget()->position(), w->layoutTarget()->floating(), Fullscreen::controller()->getFullscreenModes(w),
+            w->fullscreenPolicy().requestSuppression().fullscreen};
 }
 
 // A window and its layout target can disagree about where they live: the
@@ -345,6 +357,7 @@ static void restoreCanvasNativeWindow(uint64_t id, const SCanvasSavedWindow& sav
 
     const auto target = w->layoutTarget();
     const auto MODES = preserveFullscreen ? Fullscreen::controller()->getFullscreenModes(w) : saved.fullscreen;
+    setCanvasFullscreenRequestSuppression(w, saved.fullscreenRequestsSuppressed);
     if (restoreWorkspace)
         g_canvasSpatialLayout[id] = {.workspace = saved.workspace, .box = target->position()};
     else
@@ -3770,6 +3783,17 @@ void CScrollOverview::toggleCanvasNavigation(bool showNavigator) {
         zoomCanvasAt(CENTER, ScrollOverview::Config::getCanvasInitialZoom(), true);
         *transitionProgress = 1.F;
         beginNavigatorSession(showNavigator, workspaceBoundCanvas ? startedOn : PHLWORKSPACE{});
+        // Open on the selected client, not the HUD's first search result: the
+        // camera, focus and HUD selection all land on it. Without one, the
+        // navigator's own choice stands.
+        auto SELECTED = getOverviewWindowToShow(Desktop::focusState()->window());
+        if (!shouldShowOverviewWindow(SELECTED) || !canvasWindowInWorkspace(SELECTED))
+            SELECTED = getOverviewWindowToShow(closeOnWindow.lock());
+        if (shouldShowOverviewWindow(SELECTED) && canvasWindowInWorkspace(SELECTED) && !windowPinned(SELECTED)) {
+            followCanvasWindow(SELECTED, true, true);
+            if (SpatialOverview::Navigator::isOpen())
+                SpatialOverview::Navigator::selectWindow(SELECTED);
+        }
         if (navigatorOwnsPointer()) {
             // Applications stop receiving the pointer while the navigator
             // owns it; tell the one under it that the pointer left, and that
@@ -5056,6 +5080,7 @@ bool CScrollOverview::manageCanvasWindow(PHLWINDOW window, bool placeNew) {
     }
     if (!g_canvasNativeLayout.contains(window->metadata().stableID()))
         g_canvasNativeLayout.emplace(window->metadata().stableID(), saveCanvasWindow(window));
+    setCanvasFullscreenRequestSuppression(window, true);
     const auto MONITOR = pMonitor.lock();
 
     if (ScrollOverview::Config::getCanvasAutoFloat() && !SpatialOverview::Experiments::on(ECanvasExperiment::Areas) && !TARGET->floating()) {
@@ -7166,6 +7191,8 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
         }
 
         selectOverviewWindow(bestCandidate, workspaceIdx, true);
+        // A selected client is always on top of the stack.
+        (void)Config::Actions::alterZOrder("top", bestCandidate);
 
         // Focusing a surface may temporarily switch Hyprland to the monitor
         // that owns it. Keep the original output as the keyboard camera even
@@ -10387,11 +10414,8 @@ Vector2D CScrollOverview::canvasCameraOffsetFor(const PHLWINDOW& window, float z
 
     const auto BOX    = window->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
     auto       target = BOX.middle();
-    if (navigating) {
-        // Keep the selection clear of the search palette above it.
-        if (showsNavigatorHud())
-            target.y -= (SpatialOverview::Hud::selectionFocusY(MONITOR->m_size) - MONITOR->m_size.y * 0.5) / std::max(zoom, 0.01F);
-    } else {
+    // Navigating centres the selected client exactly on the monitor.
+    if (!navigating) {
         // At 100% an oversized window keeps its top-left corner on screen,
         // where title bars, tabs and menus live.
         if (BOX.width > MONITOR->m_size.x)
