@@ -10112,7 +10112,7 @@ void CScrollOverview::restoreSubmapIfActive() {
         return;
 
     if (Keybinds::mgr()->currentSubmap() == OVERVIEW_SUBMAP)
-        Config::Actions::setSubmap(previousSubmapName.empty() ? "reset" : previousSubmapName);
+        (void)Config::Actions::setSubmap(previousSubmapName.empty() ? "reset" : previousSubmapName);
 
     submapActive = false;
 }
