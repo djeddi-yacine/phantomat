@@ -8125,7 +8125,9 @@ void CScrollOverview::renderCanvasMinimap(Render::CRenderContext& ctx, PHLMONITO
         CONTENT.x + (CONTENT.width - WORLDBOUNDS->width * FIT) / 2.F,
         CONTENT.y + (CONTENT.height - WORLDBOUNDS->height * FIT) / 2.F,
     };
-    const auto mapWorldBox = [&](const CBox& box) {
+    // Markers match the overview previews, which shrink around their centres.
+    const float PREVIEWSCALE = overviewPreviewScale();
+    const auto  mapWorldBox  = [&](const CBox& box) {
         auto mapped = CBox{DRAWORIGIN + (box.pos() - WORLDBOUNDS->pos()) * FIT, box.size() * FIT};
         mapped.y += ENTRYOFFSET;
         mapped.width  = std::max(2.F * MONITORSCALE, sc<float>(mapped.width));
@@ -8180,7 +8182,7 @@ void CScrollOverview::renderCanvasMinimap(Render::CRenderContext& ctx, PHLMONITO
 
         if (WINDOW == FOCUSED)
             shaderMinimap.focusedIndex = sc<int>(shaderMinimap.windows.size());
-        shaderMinimap.windows.emplace_back(toArray(mapWorldBox(WINDOW->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT))));
+        shaderMinimap.windows.emplace_back(toArray(mapWorldBox(shrinkOverviewPreviewBox(WINDOW->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT), PREVIEWSCALE))));
         shaderMinimap.windowAlpha.emplace_back(navigatorFrameMatches(WINDOW) ? 1.F : 0.22F);
     }
 
@@ -8209,7 +8211,7 @@ void CScrollOverview::renderCanvasMinimap(Render::CRenderContext& ctx, PHLMONITO
         if (workspaceBoundCanvas && !navigatorFrameMatches(WINDOW))
             color.a *= 0.22F;
         CRectPassElement::SRectData marker;
-        marker.box           = mapWorldBox(WINDOW->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT));
+        marker.box           = mapWorldBox(shrinkOverviewPreviewBox(WINDOW->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT), PREVIEWSCALE));
         marker.color         = color;
         marker.round         = sc<int>(std::round(std::min(3.F * MONITORSCALE, ROUNDING)));
         marker.roundingPower = 2.F;
