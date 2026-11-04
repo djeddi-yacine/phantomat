@@ -1,7 +1,7 @@
 #include "Window.hpp"
+#include <hyprland/src/render/pass/TransformedWindowPassElement.hpp>
 #include <algorithm>
 #include <cmath>
-#include <dlfcn.h>
 #include <functional>
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/Compositor.hpp>
@@ -283,6 +283,15 @@ static void scaleOverviewChildSurfaceGeometry(const PHLWINDOW& window, const Vec
         // surfaces (OBS preview, OrcaSlicer viewport, etc.) stay attached.
         surfacePassElement->m_data.localPos *= SURFACESCALE;
     }
+}
+
+static CTransformedWindowPassElement* transformedWindowElement(const PHLWINDOW& window, Render::CRenderPass& windowPass) {
+    for (auto& passElement : capturedPassElements(windowPass)) {
+        auto* transformed = passElement.element ? dc<CTransformedWindowPassElement*>(passElement.element.get()) : nullptr;
+        if (transformed && transformed->m_data.pass && transformed->m_data.window.lock() == window)
+            return transformed;
+    }
+    return nullptr;
 }
 
 // Moves the captured window pass into the frame pass. renderWindow queues
@@ -700,6 +709,7 @@ void renderOverviewWindow(Render::CRenderContext& ctx, const SRenderParams& prev
     const Vector2D previousWorkspaceOffset = OVERRIDEWORKSPACEOFFSET ? WORKSPACE->m_renderOffset->value() : Vector2D{};
     const float    previousWorkspaceAlpha  = OVERRIDEWORKSPACEOFFSET && WORKSPACE->m_alpha ? WORKSPACE->m_alpha->value() : 1.F;
     std::optional<Render::SRenderModifData> cameraTransform;
+    CBox                                    cameraSourceBox; // the real window, where renderWindow puts its surfaces
 
     if (params.cameraTransform && params.monitor) {
         const auto SOURCEGEOMETRY = params.window->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
@@ -709,6 +719,7 @@ void renderOverviewWindow(Render::CRenderContext& ctx, const SRenderParams& prev
             (SOURCEGEOMETRY.pos() + params.window->presentation().floatingOffset() - params.monitor->m_position) * params.monitor->m_scale,
             SOURCEGEOMETRY.size() * params.monitor->m_scale,
         };
+        cameraSourceBox = SOURCEBOX;
 
         Render::SRenderModifData transform;
         transform.modifs.emplace_back(Render::SRenderModifData::RMOD_TYPE_SCALE, params.renderScale);
@@ -764,6 +775,20 @@ void renderOverviewWindow(Render::CRenderContext& ctx, const SRenderParams& prev
     if (!usePrecomputedBlur)
         blockOverviewWindowBlurOptimization(params.window, windowPass);
     roundStandaloneWindowPassElements(params.window, params.monitor, params.renderScale, windowPass);
+
+    // A transformed window (wobble, motion blur) is drawn from its own pass.
+    // The border joins that pass so it bends with the surfaces, in their
+    // space: the real window under the camera, or the preview without one.
+    bool borderInWindowPass = false;
+    if (auto* transformed = fullscreen ? nullptr : transformedWindowElement(params.window, windowPass)) {
+        const float INNERSCALE = cameraTransform ? 1.F : params.renderScale;
+        const CBox  INNERBOX   = cameraTransform ? cameraSourceBox : params.windowBox;
+        auto        redirect   = Render::IHyprRenderer::redirectPass(ctx, transformed->m_data.pass.get());
+        renderOverviewWindowBorder(ctx, params.monitor, params.window, INNERBOX, getOverviewWindowMetrics(params.monitor, params.window, INNERSCALE), colors,
+                                   params.selected);
+        borderInWindowPass = true;
+    }
+
     auto popups = commitWindowPass(ctx, params.window, windowPass);
 
     if (cameraTransform)
@@ -776,7 +801,8 @@ void renderOverviewWindow(Render::CRenderContext& ctx, const SRenderParams& prev
     if (!fullscreen) {
         renderOverviewGroupTabIndicators(ctx, params.monitor, params.window, params.windowBox, metrics, metrics.targetOpacity);
         renderOverviewGroupTabTitles(ctx, params.monitor, params.window, params.windowBox, metrics, metrics.targetOpacity);
-        renderOverviewWindowBorder(ctx, params.monitor, params.window, params.windowBox, metrics, colors, params.selected);
+        if (!borderInWindowPass)
+            renderOverviewWindowBorder(ctx, params.monitor, params.window, params.windowBox, metrics, colors, params.selected);
     }
 
     commitWindowPopups(ctx, popups, cameraTransform);

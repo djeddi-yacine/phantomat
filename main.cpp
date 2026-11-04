@@ -347,7 +347,9 @@ static void hkSurfaceFrame(void* thisptr, const Time::steady_tp& now) {
 static void hkDrawElement(void* thisptr, Render::CRenderContext& ctx, WP<IPassElement> element, const CRegion& damage) {
     const auto  ORIGINAL = original<origDrawElement>(HOOK_DRAW_ELEMENT);
     const auto* clip     = OverviewRender::canvasViewportClip;
-    if (!renderingOverview || !clip || !element) {
+    // Inside a transformed (e.g. wobbling) window's offscreen canvas the
+    // coordinates are that canvas's, not the screen's: leave it to Hyprland.
+    if (!renderingOverview || !clip || !element || ctx.m_data.renderingTransformedSource) {
         ORIGINAL(thisptr, ctx, element, damage);
         return;
     }
@@ -371,7 +373,7 @@ static void hkDrawElement(void* thisptr, Render::CRenderContext& ctx, WP<IPassEl
 static void hkDrawTex(void* thisptr, Render::CRenderContext& ctx, WP<CTexPassElement> element, const CRegion& damage) {
     const auto ORIGINAL    = original<origDrawTex>(HOOK_DRAW_TEX);
     auto&      renderModif = ctx.m_data.renderModif;
-    if (!renderingOverview || !element || !renderModif.enabled || renderModif.modifs.empty()) {
+    if (!renderingOverview || !element || !renderModif.enabled || renderModif.modifs.empty() || ctx.m_data.renderingTransformedSource) {
         ORIGINAL(thisptr, ctx, element, damage);
         return;
     }
@@ -421,7 +423,8 @@ static void hkDrawTex(void* thisptr, Render::CRenderContext& ctx, WP<CTexPassEle
 static void hkElementDrawTex(void* thisptr, Render::CRenderContext& ctx, WP<CTexPassElement> element, const CRegion& damage) {
     const auto ORIGINAL    = original<origDrawTex>(HOOK_ELEMENT_DRAW_TEX);
     auto&      renderModif = ctx.m_data.renderModif;
-    if (!renderingOverview || !element || !renderModif.enabled || renderModif.modifs.empty() || !ctx.m_data.currentWindow || !element->m_data.surface) {
+    if (!renderingOverview || !element || !renderModif.enabled || renderModif.modifs.empty() || !ctx.m_data.currentWindow || !element->m_data.surface ||
+        ctx.m_data.renderingTransformedSource) {
         ORIGINAL(thisptr, ctx, element, damage);
         return;
     }
