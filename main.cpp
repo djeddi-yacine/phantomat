@@ -81,7 +81,7 @@ static TFn original(eHook hook) {
 
 using origRenderWorkspace  = void (*)(void*, Render::CRenderContext&, PHLMONITOR, PHLWORKSPACE, const Time::steady_tp&, const CBox&);
 using origRenderWindow     = void (*)(void*, Render::CRenderContext&, PHLWINDOW, PHLMONITOR, const Render::SWindowRenderPresentation&, const Time::steady_tp&, bool,
-                                  Render::eRenderPassMode, bool, bool);
+                                      Render::eRenderPassMode, bool, bool);
 using origWorkspaceWindows = void (*)(void*, Render::CRenderContext&, PHLMONITOR, PHLWORKSPACE, const Time::steady_tp&, Render::eSceneMode);
 using origAddDamageBox     = void (*)(void*, const CBox&);
 using origAddDamageRegion  = void (*)(void*, const pixman_region32_t*);
@@ -104,23 +104,23 @@ APICALL EXPORT std::string PLUGIN_API_VERSION() {
     return HYPRLAND_API_VERSION;
 }
 
-static bool renderingOverview = false;
-static bool damageFromSurface = false;
+static bool          renderingOverview = false;
+static bool          damageFromSurface = false;
 static PHLMONITORREF renderingOverviewMonitor;
 struct SWorkspaceCanvasRenderContext {
-    PHLMONITOR                        monitor;
-    PHLWORKSPACE                      workspace;
-    std::vector<SP<CScrollOverview>>   canvases;
+    PHLMONITOR                       monitor;
+    PHLWORKSPACE                     workspace;
+    std::vector<SP<CScrollOverview>> canvases;
 };
 // Only valid while the native workspace pass is executing synchronously.
-static SWorkspaceCanvasRenderContext* g_workspaceCanvasRenderContext = nullptr;
-static bool g_scrollOverviewHooksActive = false;
-static wl_event_source* g_workspaceCanvasSyncIdle = nullptr;
-static wl_event_source* g_workspaceCanvasTransitionTimer = nullptr;
+static SWorkspaceCanvasRenderContext* g_workspaceCanvasRenderContext   = nullptr;
+static bool                           g_scrollOverviewHooksActive      = false;
+static wl_event_source*               g_workspaceCanvasSyncIdle        = nullptr;
+static wl_event_source*               g_workspaceCanvasTransitionTimer = nullptr;
 
-static void failNotif(const std::string& reason);
+static void                           failNotif(const std::string& reason);
 
-static int workspaceCanvasTransitionTimerCallback(void*) {
+static int                            workspaceCanvasTransitionTimerCallback(void*) {
     if (g_unloading) {
         clearWorkspaceTransitionOverviews();
         g_workspaceCanvasTransitionTimer = nullptr;
@@ -129,10 +129,9 @@ static int workspaceCanvasTransitionTimerCallback(void*) {
 
     const auto transitions = workspaceTransitionOverviews();
     for (const auto& overview : transitions) {
-        const auto* canvas = dynamic_cast<const CScrollOverview*>(overview.get());
+        const auto* canvas    = dynamic_cast<const CScrollOverview*>(overview.get());
         const auto  workspace = canvas ? canvas->workspaceCanvas() : PHLWORKSPACE{};
-        const bool  animating = valid(workspace) &&
-            (workspace->m_alpha->isBeingAnimated() || workspace->m_renderOffset->isBeingAnimated());
+        const bool  animating = valid(workspace) && (workspace->m_alpha->isBeingAnimated() || workspace->m_renderOffset->isBeingAnimated());
         if (!animating) {
             releaseWorkspaceTransitionOverview(overview.get());
             // Retiring a camera plane erases its output-space footprint once.
@@ -143,7 +142,8 @@ static int workspaceCanvasTransitionTimerCallback(void*) {
     }
 
     if (workspaceTransitionOverviews().empty()) {
-        if (g_workspaceCanvasTransitionTimer) wl_event_source_remove(g_workspaceCanvasTransitionTimer);
+        if (g_workspaceCanvasTransitionTimer)
+            wl_event_source_remove(g_workspaceCanvasTransitionTimer);
         g_workspaceCanvasTransitionTimer = nullptr;
         if (scrollOverviews().empty())
             disableScrollOverviewHooks();
@@ -180,9 +180,8 @@ static void hkScheduleFrame(void* thisptr, Aquamarine::IOutput::scheduleFrameRea
     if (OVERVIEW) {
         using enum Aquamarine::IOutput::scheduleFrameReason;
 
-        const bool THROTTLEDREASON =
-            reason == AQ_SCHEDULE_UNKNOWN || reason == AQ_SCHEDULE_CLIENT_UNKNOWN || reason == AQ_SCHEDULE_NEEDS_FRAME || reason == AQ_SCHEDULE_RENDER_MONITOR ||
-            reason == AQ_SCHEDULE_DAMAGE;
+        const bool THROTTLEDREASON = reason == AQ_SCHEDULE_UNKNOWN || reason == AQ_SCHEDULE_CLIENT_UNKNOWN || reason == AQ_SCHEDULE_NEEDS_FRAME ||
+            reason == AQ_SCHEDULE_RENDER_MONITOR || reason == AQ_SCHEDULE_DAMAGE;
 
         if (THROTTLEDREASON && !OVERVIEW->blockDamageReporting && !OVERVIEW->shouldAllowRealtimePreviewSchedule())
             return;
@@ -233,8 +232,7 @@ static void hkWorkspaceWindows(void* thisptr, Render::CRenderContext& ctx, PHLMO
     renderWorkspaceWindowPlanes(HOOK_WORKSPACE_WINDOWS, thisptr, ctx, monitor, workspace, now, mode);
 }
 
-static void hkWorkspaceFullscreen(void* thisptr, Render::CRenderContext& ctx, PHLMONITOR monitor, PHLWORKSPACE workspace, const Time::steady_tp& now,
-                                  Render::eSceneMode mode) {
+static void hkWorkspaceFullscreen(void* thisptr, Render::CRenderContext& ctx, PHLMONITOR monitor, PHLWORKSPACE workspace, const Time::steady_tp& now, Render::eSceneMode mode) {
     renderWorkspaceWindowPlanes(HOOK_WORKSPACE_FULLSCREEN, thisptr, ctx, monitor, workspace, now, mode);
 }
 
@@ -249,9 +247,9 @@ static void hkRenderWindow(void* thisptr, Render::CRenderContext& ctx, PHLWINDOW
 }
 
 static void hkRenderWorkspace(void* thisptr, Render::CRenderContext& ctx, PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const Time::steady_tp& now, const CBox& geometry) {
-    const auto ORIGINAL = original<origRenderWorkspace>(HOOK_RENDER_WORKSPACE);
-    auto       overview = scrollOverviewForMonitor(pMonitor);
-    const auto* canvas  = overview ? dynamic_cast<const CScrollOverview*>(overview.get()) : nullptr;
+    const auto  ORIGINAL = original<origRenderWorkspace>(HOOK_RENDER_WORKSPACE);
+    auto        overview = scrollOverviewForMonitor(pMonitor);
+    const auto* canvas   = overview ? dynamic_cast<const CScrollOverview*>(overview.get()) : nullptr;
     if (!renderingOverview && (!overview || (canvas && canvas->isWorkspaceBoundCanvas()))) {
         SWorkspaceCanvasRenderContext context{pMonitor, pWorkspace, {}};
         const auto                    append = [&](const SP<IOverview>& candidate) {
@@ -506,9 +504,9 @@ static void hkConfigureRequest(void* thisptr, const CBox& logicalBox) {
         return;
     }
 
-    const auto MONITOR    = window->m_monitor.lock();
-    const auto CLIENTBOX  = window->backend().logicalToClient(logicalBox, MONITOR);
-    const auto CANVASBOX  = canvasX11Request(thisptr, CLIENTBOX);
+    const auto MONITOR   = window->m_monitor.lock();
+    const auto CLIENTBOX = window->backend().logicalToClient(logicalBox, MONITOR);
+    const auto CANVASBOX = canvasX11Request(thisptr, CLIENTBOX);
     ORIGINAL(thisptr, CANVASBOX == CLIENTBOX ? logicalBox : window->backend().clientToLogical(CANVASBOX, MONITOR));
 }
 
@@ -746,7 +744,7 @@ static SP<IOverview> dispatcherOverview() {
     return activeScrollOverview();
 }
 
-void canvasReclaimScreen(const PHLMONITOR& monitor); // scrollOverview.cpp
+void        canvasReclaimScreen(const PHLMONITOR& monitor); // scrollOverview.cpp
 
 static bool openOverview(PHLMONITOR monitor, bool workspaceBoundCanvas = false) {
     if (!monitor || scrollOverviewForMonitor(monitor))
@@ -839,15 +837,15 @@ static void scheduleWorkspaceCanvasSync() {
     g_workspaceCanvasSyncIdle = wl_event_loop_add_idle(g_pCompositor->m_wlEventLoop, [](void*) { syncWorkspaceCanvasSessions(); }, nullptr);
 }
 
-void canvasFullscreenEvent(PHLWINDOW window); // scrollOverview.cpp
-bool canvasPointerMoved();
-std::string canvasStateJson();
+void                              canvasFullscreenEvent(PHLWINDOW window); // scrollOverview.cpp
+bool                              canvasPointerMoved();
+std::string                       canvasStateJson();
 static SP<IPC::Socket1::SCommand> g_stateCommand;
-void canvasFullscreenReset();
-bool canvasToggleFill(PHLWINDOW window);
-bool canvasTogglePin(PHLWINDOW window);
+void                              canvasFullscreenReset();
+bool                              canvasToggleFill(PHLWINDOW window);
+bool                              canvasTogglePin(PHLWINDOW window);
 
-static SDispatchResult onOverviewDispatcher(std::string arg) {
+static SDispatchResult            onOverviewDispatcher(std::string arg) {
     const auto [ACTION, TARGET] = splitOverviewArg(arg);
 
     if (ACTION == "select") {
@@ -945,35 +943,43 @@ static SDispatchResult onWindowDispatcher(std::string arg) {
     return {};
 }
 
-static PHLWINDOWREF g_flightDeckNativeWindow;
+static PHLWINDOWREF                g_flightDeckNativeWindow;
 static Fullscreen::SFullscreenMode g_flightDeckPreviousModes;
-static bool g_flightDeckNativePending = false;
-struct SFlightDeckRequest { PHLWINDOWREF window; Fullscreen::eFullscreenMode mode; };
-static wl_event_source* g_flightDeckIdle = nullptr;
+static bool                        g_flightDeckNativePending = false;
+struct SFlightDeckRequest {
+    PHLWINDOWREF                window;
+    Fullscreen::eFullscreenMode mode;
+};
+static wl_event_source*                    g_flightDeckIdle = nullptr;
 static std::unique_ptr<SFlightDeckRequest> g_flightDeckRequest;
 
-void requestFlightDeckNative(PHLWINDOW window, Fullscreen::eFullscreenMode mode) {
-    if (g_flightDeckNativePending) return;
+void                                       requestFlightDeckNative(PHLWINDOW window, Fullscreen::eFullscreenMode mode) {
+    if (g_flightDeckNativePending)
+        return;
     g_flightDeckNativePending = true;
-    g_flightDeckRequest = std::make_unique<SFlightDeckRequest>(window, mode);
-    g_flightDeckIdle = wl_event_loop_add_idle(g_pCompositor->m_wlEventLoop, [](void*) {
-        g_flightDeckIdle = nullptr;
-        const auto request = std::move(g_flightDeckRequest);
-        if (g_workspaceCanvasTransitionTimer) wl_event_source_remove(g_workspaceCanvasTransitionTimer);
-        g_workspaceCanvasTransitionTimer = nullptr;
-        clearScrollOverviews();
-        clearWorkspaceTransitionOverviews();
-        disableScrollOverviewHooks();
-        const auto w = request->window.lock();
-        if (validMapped(w)) {
-            g_flightDeckNativeWindow = w;
-            g_flightDeckPreviousModes = Fullscreen::controller()->getFullscreenModes(w);
-            Desktop::focusState()->fullWindowFocus(w, Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
-            if (request->mode != Fullscreen::FSMODE_NONE)
-                Fullscreen::controller()->setFullscreenMode(w, request->mode, request->mode);
-        }
-        g_flightDeckNativePending = false;
-    }, nullptr);
+    g_flightDeckRequest       = std::make_unique<SFlightDeckRequest>(window, mode);
+    g_flightDeckIdle          = wl_event_loop_add_idle(
+        g_pCompositor->m_wlEventLoop,
+        [](void*) {
+            g_flightDeckIdle   = nullptr;
+            const auto request = std::move(g_flightDeckRequest);
+            if (g_workspaceCanvasTransitionTimer)
+                wl_event_source_remove(g_workspaceCanvasTransitionTimer);
+            g_workspaceCanvasTransitionTimer = nullptr;
+            clearScrollOverviews();
+            clearWorkspaceTransitionOverviews();
+            disableScrollOverviewHooks();
+            const auto w = request->window.lock();
+            if (validMapped(w)) {
+                g_flightDeckNativeWindow  = w;
+                g_flightDeckPreviousModes = Fullscreen::controller()->getFullscreenModes(w);
+                Desktop::focusState()->fullWindowFocus(w, Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
+                if (request->mode != Fullscreen::FSMODE_NONE)
+                    Fullscreen::controller()->setFullscreenMode(w, request->mode, request->mode);
+            }
+            g_flightDeckNativePending = false;
+        },
+        nullptr);
     if (!g_flightDeckIdle) {
         g_flightDeckRequest.reset();
         g_flightDeckNativePending = false;
@@ -1018,7 +1024,7 @@ static SDispatchResult setWorkspaceCanvasMode(const PHLMONITOR& monitor, const P
 
 static SDispatchResult toggleWorkspaceCanvasHud(const PHLMONITOR& monitor, const PHLWORKSPACE& workspace) {
     const auto OVERVIEW = monitor ? scrollOverviewForMonitor(monitor) : SP<IOverview>{};
-    auto* CANVAS = OVERVIEW ? dynamic_cast<CScrollOverview*>(OVERVIEW.get()) : nullptr;
+    auto*      CANVAS   = OVERVIEW ? dynamic_cast<CScrollOverview*>(OVERVIEW.get()) : nullptr;
     if (!CANVAS || !workspace || CANVAS->isClosing() || !CANVAS->isWorkspaceBoundCanvas() || CANVAS->workspaceCanvas() != workspace ||
         !SpatialOverview::workspaceCanvasEnabled(workspace))
         return {};
@@ -1027,7 +1033,7 @@ static SDispatchResult toggleWorkspaceCanvasHud(const PHLMONITOR& monitor, const
 }
 
 static SDispatchResult onWorkspaceCanvasDispatcher(const std::string& arg) {
-    const auto MONITOR   = Desktop::focusState()->monitor();
+    const auto MONITOR = Desktop::focusState()->monitor();
     if (MONITOR && MONITOR->m_activeSpecialWorkspace)
         return {}; // A special workspace owns input; do not toggle the workspace underneath it.
     const auto WORKSPACE = MONITOR ? MONITOR->m_activeWorkspace : PHLWORKSPACE{};
@@ -1047,11 +1053,12 @@ static SDispatchResult onCanvasDispatcher(std::string arg) {
 
     if (arg.starts_with("experiment ")) {
         const auto PREVIOUS = SpatialOverview::Experiments::id();
-        const auto NAME = arg.substr(11);
+        const auto NAME     = arg.substr(11);
         if (!SpatialOverview::Experiments::setByName(NAME))
             return {.success = false, .error = "unknown experiment"};
         onCanvasExperimentChanged(PREVIOUS);
-        HyprlandAPI::addNotification(SCROLLOVERVIEW_HANDLE, SpatialOverview::Experiments::title() + ". " + SpatialOverview::Experiments::help(), CHyprColor{0.55F, 0.9F, 1.F, 1.F}, 7000);
+        HyprlandAPI::addNotification(SCROLLOVERVIEW_HANDLE, SpatialOverview::Experiments::title() + ". " + SpatialOverview::Experiments::help(), CHyprColor{0.55F, 0.9F, 1.F, 1.F},
+                                     7000);
         return {};
     }
     if (arg == "switch next" || arg == "switch prev") {
@@ -1064,7 +1071,7 @@ static SDispatchResult onCanvasDispatcher(std::string arg) {
         if (!SpatialOverview::Experiments::on(ECanvasExperiment::AltTab))
             return {.success = false, .error = "Alt-Tab experiment is not selected"};
         const auto OVERVIEW = dispatcherOverview();
-        auto* CANVAS = OVERVIEW ? dynamic_cast<CScrollOverview*>(OVERVIEW.get()) : nullptr;
+        auto*      CANVAS   = OVERVIEW ? dynamic_cast<CScrollOverview*>(OVERVIEW.get()) : nullptr;
         if (!CANVAS)
             return {.success = false, .error = "Open the canvas before using this action"};
         return CANVAS->cycleAltTab(arg == "alttab next" ? 1 : -1) ? SDispatchResult{} : SDispatchResult{.success = false, .error = "No window to cycle"};
@@ -1078,7 +1085,10 @@ static SDispatchResult onCanvasDispatcher(std::string arg) {
         return {};
     }
     if (arg == "native" || arg == "maximize" || arg == "fullscreen") {
-        requestFlightDeckNative(Desktop::focusState()->window(), arg == "fullscreen" ? Fullscreen::FSMODE_FULLSCREEN : arg == "maximize" ? Fullscreen::FSMODE_MAXIMIZED : Fullscreen::FSMODE_NONE);
+        requestFlightDeckNative(Desktop::focusState()->window(),
+                                arg == "fullscreen"   ? Fullscreen::FSMODE_FULLSCREEN :
+                                    arg == "maximize" ? Fullscreen::FSMODE_MAXIMIZED :
+                                                        Fullscreen::FSMODE_NONE);
         return {};
     }
     if (arg == "fill")
@@ -1088,8 +1098,9 @@ static SDispatchResult onCanvasDispatcher(std::string arg) {
     // For keys that have nothing to do on the canvas (tiling): succeeds, so
     // canvas_or() bindings skip their fallback, only while a canvas is open.
     if (arg == "noop")
-        return std::ranges::any_of(scrollOverviews(), [](const auto& overview) { return overview && !overview->isClosing(); }) ? SDispatchResult{}
-                                                                                                                                : SDispatchResult{.success = false, .error = "Open the canvas before using this action"};
+        return std::ranges::any_of(scrollOverviews(), [](const auto& overview) { return overview && !overview->isClosing(); }) ?
+            SDispatchResult{} :
+            SDispatchResult{.success = false, .error = "Open the canvas before using this action"};
     if (!CANVAS)
         return arg == "refresh" ? SDispatchResult{} : SDispatchResult{.success = false, .error = "Open the canvas before using this action"};
     if (arg == "back" || arg == "land" || arg == "frame" || arg == "undo" || arg == "redo" || arg == "fit" || arg == "summon" || arg == "search" || arg == "tune" ||
@@ -1112,8 +1123,8 @@ static SDispatchResult onCanvasDispatcher(std::string arg) {
         return {};
     }
 
-    int                column = 0;
-    int                row    = 0;
+    int column = 0;
+    int row    = 0;
     stream >> column >> row;
     if ((action != "place" && action != "viewport") || stream.fail())
         return {.success = false, .error = "expected: place <column> <row> | viewport <x> <y> | refresh | arrange"};
@@ -1185,7 +1196,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
     createScrollOverviewHooks();
 
-    static auto P = Event::bus()->m_events.render.pre.listen([](PHLMONITOR monitor) {
+    static auto P                   = Event::bus()->m_events.render.pre.listen([](PHLMONITOR monitor) {
         const auto overview = scrollOverviewForMonitor(monitor);
         if (overview)
             overview->onPreRender();
@@ -1194,18 +1205,16 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         // owns the output-sized footprint, not its clients' source rectangles.
         // Damage the current frame only; do not start an idle repaint loop.
         if ((canvas && canvas->isWorkspaceBoundCanvas()) ||
-            std::ranges::any_of(workspaceTransitionOverviews(), [&](const auto& outgoing) {
-                return outgoing->pMonitor.lock() == monitor;
-            }))
+            std::ranges::any_of(workspaceTransitionOverviews(), [&](const auto& outgoing) { return outgoing->pMonitor.lock() == monitor; }))
             monitor->m_damage.damageEntire();
     });
-    static auto HUDSTAGE = Event::bus()->m_events.render.stage.listen([](const Event::SRenderStageEvent& event) {
+    static auto HUDSTAGE            = Event::bus()->m_events.render.stage.listen([](const Event::SRenderStageEvent& event) {
         if (event.stage == RENDER_BEGIN)
             SpatialOverview::BarrelShader::updateUniforms(0.F);
         if (event.stage == RENDER_LAST_MOMENT && event.context)
             SpatialOverview::BarrelShader::applyPendingHud(event.context->get());
     });
-    const auto dropMonitorOverview = [](PHLMONITOR monitor) {
+    const auto  dropMonitorOverview = [](PHLMONITOR monitor) {
         g_overviewMonitorTeardown = true;
         unregisterScrollOverviewForMonitor(monitor);
         g_overviewMonitorTeardown = false;
@@ -1217,19 +1226,19 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
     // Fullscreen on the canvas: only the screen showing the window steps
     // aside, and comes back after (scrollOverview.cpp).
-    static auto CANVASFULLSCREEN = Event::bus()->m_events.window.fullscreen.listen([](PHLWINDOW window) {
+    static auto CANVASFULLSCREEN          = Event::bus()->m_events.window.fullscreen.listen([](PHLWINDOW window) {
         if (!g_unloading) {
             canvasFullscreenEvent(window);
             scheduleWorkspaceCanvasSync();
         }
     });
-    static auto CANVASFULLSCREENCLOSE = Event::bus()->m_events.window.close.listen([](PHLWINDOW) {
+    static auto CANVASFULLSCREENCLOSE     = Event::bus()->m_events.window.close.listen([](PHLWINDOW) {
         if (!g_unloading) {
             canvasFullscreenEvent(nullptr);
             scheduleWorkspaceCanvasSync();
         }
     });
-    static auto CANVASFULLSCREENMOVE = Event::bus()->m_events.window.moveToWorkspace.listen([](PHLWINDOW, PHLWORKSPACE) {
+    static auto CANVASFULLSCREENMOVE      = Event::bus()->m_events.window.moveToWorkspace.listen([](PHLWINDOW, PHLWORKSPACE) {
         if (!g_unloading) {
             canvasFullscreenEvent(nullptr);
             scheduleWorkspaceCanvasSync();
@@ -1241,7 +1250,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
             scheduleWorkspaceCanvasSync();
         }
     });
-    static auto WORKSPACECANVASREMOVED = Event::bus()->m_events.workspace.removed.listen([](auto workspaceRef) {
+    static auto WORKSPACECANVASREMOVED    = Event::bus()->m_events.workspace.removed.listen([](auto workspaceRef) {
         SpatialOverview::forgetWorkspaceCanvas(workspaceRef.lock());
         scheduleWorkspaceCanvasSync();
     });
@@ -1265,11 +1274,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     });
 
     // hyprctl spatialoverview: the canvases' state as JSON, for scripts and tests.
-    g_stateCommand = HyprlandAPI::registerHyprCtlCommand(SCROLLOVERVIEW_HANDLE, IPC::Socket1::SCommand{.name    = "spatialoverview",
-                                                                                                  .match   = IPC::Socket1::COMMAND_MATCH_EXACT,
-                                                                                                  .handler = [](const IPC::Socket1::SRequest&) -> IPC::Socket1::SResponse {
-                                                                                                      return canvasStateJson();
-                                                                                                  }});
+    g_stateCommand = HyprlandAPI::registerHyprCtlCommand(
+        SCROLLOVERVIEW_HANDLE,
+        IPC::Socket1::SCommand{.name = "spatialoverview", .match = IPC::Socket1::COMMAND_MATCH_EXACT, .handler = [](const IPC::Socket1::SRequest&) -> IPC::Socket1::SResponse {
+                                   return canvasStateJson();
+                               }});
 
     ScrollOverview::Config::registerDispatcher("overview", ::onOverviewDispatcher);
     ScrollOverview::Config::registerDispatcher("navigate", ::onNavigateDispatcher);
@@ -1282,13 +1291,16 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
-    if (g_flightDeckIdle) wl_event_source_remove(g_flightDeckIdle);
+    if (g_flightDeckIdle)
+        wl_event_source_remove(g_flightDeckIdle);
     g_flightDeckIdle = nullptr;
     g_flightDeckRequest.reset();
     g_flightDeckNativePending = false;
-    if (g_workspaceCanvasSyncIdle) wl_event_source_remove(g_workspaceCanvasSyncIdle);
+    if (g_workspaceCanvasSyncIdle)
+        wl_event_source_remove(g_workspaceCanvasSyncIdle);
     g_workspaceCanvasSyncIdle = nullptr;
-    if (g_workspaceCanvasTransitionTimer) wl_event_source_remove(g_workspaceCanvasTransitionTimer);
+    if (g_workspaceCanvasTransitionTimer)
+        wl_event_source_remove(g_workspaceCanvasTransitionTimer);
     g_workspaceCanvasTransitionTimer = nullptr;
     if (g_pHyprRenderer)
         g_pHyprRenderer->context().m_pass.removeAllOfType("CScrollOverviewPassElement");

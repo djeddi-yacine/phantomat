@@ -15,14 +15,14 @@ class CDropIndicator {
     };
 
     struct SRenderParams {
-        PHLMONITOR   monitor;
-        PHLWORKSPACE workspace;
-        CBox         workspaceUsableBox;
-        SDropAnchor  anchor;
-        float        renderScale           = 1.F;
-        bool         workspaceFullyVisible = false;
-        bool         floating              = false;
-        ScrollOverview::Config::ELayout layout = ScrollOverview::Config::ELayout::VERTICAL;
+        PHLMONITOR                      monitor;
+        PHLWORKSPACE                    workspace;
+        CBox                            workspaceUsableBox;
+        SDropAnchor                     anchor;
+        float                           renderScale           = 1.F;
+        bool                            workspaceFullyVisible = false;
+        bool                            floating              = false;
+        ScrollOverview::Config::ELayout layout                = ScrollOverview::Config::ELayout::VERTICAL;
     };
 
     static void renderDropIndicator(Render::CRenderContext& ctx, const SRenderParams& params);

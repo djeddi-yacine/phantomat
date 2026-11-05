@@ -19,109 +19,108 @@ template struct SPrivateMember<SScrollingDataTag, &Layout::Tiled::CScrollingAlgo
 
 namespace {
 
-static constexpr float INDICATOR_BASE_SIZE_PX = 200.F;
-static constexpr float INDICATOR_ALPHA   = 0.3F;
+    static constexpr float INDICATOR_BASE_SIZE_PX = 200.F;
+    static constexpr float INDICATOR_ALPHA        = 0.3F;
 
-static CHyprColor indicatorColor() {
-    auto* const ACTIVEBORDER = sc<Config::CGradientValueData*>(ScrollOverview::Config::valueRef<Config::IComplexConfigValue>("general:col.active_border").ptr());
-    if (!ACTIVEBORDER || ACTIVEBORDER->m_colors.empty())
-        return Colors::WHITE.modifyA(INDICATOR_ALPHA);
+    static CHyprColor      indicatorColor() {
+        auto* const ACTIVEBORDER = sc<Config::CGradientValueData*>(ScrollOverview::Config::valueRef<Config::IComplexConfigValue>("general:col.active_border").ptr());
+        if (!ACTIVEBORDER || ACTIVEBORDER->m_colors.empty())
+            return Colors::WHITE.modifyA(INDICATOR_ALPHA);
 
-    return ACTIVEBORDER->m_colors[0].modifyA(INDICATOR_ALPHA);
-}
-
-static bool isHorizontalSide(const std::string& side) {
-    return side == "l" || side == "r";
-}
-
-static bool isVerticalSide(const std::string& side) {
-    return side == "u" || side == "d";
-}
-
-static Layout::Tiled::CScrollingAlgorithm* scrollingAlgorithmForWorkspace(const PHLWORKSPACE& workspace) {
-    if (!workspace || !workspace->space() || !workspace->space()->algorithm())
-        return nullptr;
-
-    return dc<Layout::Tiled::CScrollingAlgorithm*>(workspace->space()->algorithm()->tiledAlgo().get());
-}
-
-
-static bool scrollingPrimaryHorizontal(const PHLWORKSPACE& workspace) {
-    const auto  ALGO = scrollingAlgorithmForWorkspace(workspace);
-    const auto& DATA = ALGO ? ALGO->*privateMember(SScrollingDataTag{}) : nullptr;
-    if (!DATA || !DATA->controller)
-        return true;
-
-    return DATA->controller->isPrimaryHorizontal();
-}
-
-static CBox scrollingIndicatorBox(const CDropIndicator::SRenderParams& params) {
-    if (!params.anchor.window)
-        return params.workspaceUsableBox;
-
-    const bool  HORIZONTALSIDE = isHorizontalSide(params.anchor.direction);
-    const bool  PRIMARYHORIZONTAL = scrollingPrimaryHorizontal(params.workspace);
-    const float MONITOR_SCALE = std::max<float>(params.monitor ? params.monitor->m_scale : 1.F, 0.01F);
-    const float SIZE = INDICATOR_BASE_SIZE_PX * std::max(params.renderScale, 0.01F) * MONITOR_SCALE;
-    const auto& EDGEBOX = params.anchor.logicalBox.empty() ? params.anchor.box : params.anchor.logicalBox;
-    CBox        box;
-
-    if (HORIZONTALSIDE) {
-        const float CENTERX = params.anchor.direction == "l" ? EDGEBOX.x : EDGEBOX.x + EDGEBOX.width;
-        box.width  = SIZE;
-        box.height = PRIMARYHORIZONTAL ? params.workspaceUsableBox.height : params.anchor.box.height;
-        box.x      = CENTERX - SIZE / 2.F;
-        box.y      = PRIMARYHORIZONTAL ? params.workspaceUsableBox.y : params.anchor.box.y;
-    } else {
-        const float CENTERY = params.anchor.direction == "u" ? EDGEBOX.y : EDGEBOX.y + EDGEBOX.height;
-        box.width  = PRIMARYHORIZONTAL ? params.anchor.box.width : params.workspaceUsableBox.width;
-        box.height = SIZE;
-        box.x      = PRIMARYHORIZONTAL ? params.anchor.box.x : params.workspaceUsableBox.x;
-        box.y      = CENTERY - SIZE / 2.F;
+        return ACTIVEBORDER->m_colors[0].modifyA(INDICATOR_ALPHA);
     }
 
-    box.round();
-    return box;
-}
+    static bool isHorizontalSide(const std::string& side) {
+        return side == "l" || side == "r";
+    }
 
-static CBox indicatorBox(const CDropIndicator::SRenderParams& params) {
-    if (!params.anchor.window)
-        return params.workspaceUsableBox;
+    static bool isVerticalSide(const std::string& side) {
+        return side == "u" || side == "d";
+    }
 
-    if (params.anchor.direction.empty())
-        return params.anchor.box;
+    static Layout::Tiled::CScrollingAlgorithm* scrollingAlgorithmForWorkspace(const PHLWORKSPACE& workspace) {
+        if (!workspace || !workspace->space() || !workspace->space()->algorithm())
+            return nullptr;
 
-    if (!scrollingAlgorithmForWorkspace(params.workspace))
-        return params.anchor.box;
+        return dc<Layout::Tiled::CScrollingAlgorithm*>(workspace->space()->algorithm()->tiledAlgo().get());
+    }
 
-    return scrollingIndicatorBox(params);
-}
+    static bool scrollingPrimaryHorizontal(const PHLWORKSPACE& workspace) {
+        const auto  ALGO = scrollingAlgorithmForWorkspace(workspace);
+        const auto& DATA = ALGO ? ALGO->*privateMember(SScrollingDataTag{}) : nullptr;
+        if (!DATA || !DATA->controller)
+            return true;
 
-static CBox clipScrollingIndicatorBox(CBox box, const CDropIndicator::SRenderParams& params) {
-    if (!scrollingAlgorithmForWorkspace(params.workspace))
+        return DATA->controller->isPrimaryHorizontal();
+    }
+
+    static CBox scrollingIndicatorBox(const CDropIndicator::SRenderParams& params) {
+        if (!params.anchor.window)
+            return params.workspaceUsableBox;
+
+        const bool  HORIZONTALSIDE    = isHorizontalSide(params.anchor.direction);
+        const bool  PRIMARYHORIZONTAL = scrollingPrimaryHorizontal(params.workspace);
+        const float MONITOR_SCALE     = std::max<float>(params.monitor ? params.monitor->m_scale : 1.F, 0.01F);
+        const float SIZE              = INDICATOR_BASE_SIZE_PX * std::max(params.renderScale, 0.01F) * MONITOR_SCALE;
+        const auto& EDGEBOX           = params.anchor.logicalBox.empty() ? params.anchor.box : params.anchor.logicalBox;
+        CBox        box;
+
+        if (HORIZONTALSIDE) {
+            const float CENTERX = params.anchor.direction == "l" ? EDGEBOX.x : EDGEBOX.x + EDGEBOX.width;
+            box.width           = SIZE;
+            box.height          = PRIMARYHORIZONTAL ? params.workspaceUsableBox.height : params.anchor.box.height;
+            box.x               = CENTERX - SIZE / 2.F;
+            box.y               = PRIMARYHORIZONTAL ? params.workspaceUsableBox.y : params.anchor.box.y;
+        } else {
+            const float CENTERY = params.anchor.direction == "u" ? EDGEBOX.y : EDGEBOX.y + EDGEBOX.height;
+            box.width           = PRIMARYHORIZONTAL ? params.anchor.box.width : params.workspaceUsableBox.width;
+            box.height          = SIZE;
+            box.x               = PRIMARYHORIZONTAL ? params.anchor.box.x : params.workspaceUsableBox.x;
+            box.y               = CENTERY - SIZE / 2.F;
+        }
+
+        box.round();
         return box;
+    }
 
-    const bool PRIMARYHORIZONTAL = scrollingPrimaryHorizontal(params.workspace);
+    static CBox indicatorBox(const CDropIndicator::SRenderParams& params) {
+        if (!params.anchor.window)
+            return params.workspaceUsableBox;
 
-    if (PRIMARYHORIZONTAL)
-        return box.intersection({{box.x, params.workspaceUsableBox.y}, {box.width, params.workspaceUsableBox.height}});
+        if (params.anchor.direction.empty())
+            return params.anchor.box;
 
-    return box.intersection({{params.workspaceUsableBox.x, box.y}, {params.workspaceUsableBox.width, box.height}});
-}
+        if (!scrollingAlgorithmForWorkspace(params.workspace))
+            return params.anchor.box;
 
-static int indicatorRounding(const CDropIndicator::SRenderParams& params) {
-    const float ROUNDING = params.anchor.window ? params.anchor.window->presentation().rounding() : ScrollOverview::Config::getValue<int>("decoration:rounding");
-    const float SCALE    = std::max(params.renderScale, 0.01F) * std::max<float>(params.monitor ? params.monitor->m_scale : 1.F, 0.01F);
+        return scrollingIndicatorBox(params);
+    }
 
-    return std::max(0, sc<int>(std::round(ROUNDING * SCALE)));
-}
+    static CBox clipScrollingIndicatorBox(CBox box, const CDropIndicator::SRenderParams& params) {
+        if (!scrollingAlgorithmForWorkspace(params.workspace))
+            return box;
 
-static float indicatorRoundingPower(const CDropIndicator::SRenderParams& params) {
-    if (params.anchor.window)
-        return params.anchor.window->presentation().roundingPower();
+        const bool PRIMARYHORIZONTAL = scrollingPrimaryHorizontal(params.workspace);
 
-    return ScrollOverview::Config::getValue<float>("decoration:rounding_power");
-}
+        if (PRIMARYHORIZONTAL)
+            return box.intersection({{box.x, params.workspaceUsableBox.y}, {box.width, params.workspaceUsableBox.height}});
+
+        return box.intersection({{params.workspaceUsableBox.x, box.y}, {params.workspaceUsableBox.width, box.height}});
+    }
+
+    static int indicatorRounding(const CDropIndicator::SRenderParams& params) {
+        const float ROUNDING = params.anchor.window ? params.anchor.window->presentation().rounding() : ScrollOverview::Config::getValue<int>("decoration:rounding");
+        const float SCALE    = std::max(params.renderScale, 0.01F) * std::max<float>(params.monitor ? params.monitor->m_scale : 1.F, 0.01F);
+
+        return std::max(0, sc<int>(std::round(ROUNDING * SCALE)));
+    }
+
+    static float indicatorRoundingPower(const CDropIndicator::SRenderParams& params) {
+        if (params.anchor.window)
+            return params.anchor.window->presentation().roundingPower();
+
+        return ScrollOverview::Config::getValue<float>("decoration:rounding_power");
+    }
 
 }
 

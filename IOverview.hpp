@@ -9,7 +9,7 @@
 
 class CWLSurfaceResource;
 namespace Render {
-class CRenderContext;
+    class CRenderContext;
 }
 
 class IOverview {
@@ -17,15 +17,15 @@ class IOverview {
     IOverview()          = default;
     virtual ~IOverview() = default;
 
-    virtual void  render(Render::CRenderContext& ctx)     = 0;
-    virtual void  damage()           = 0;
-    virtual void  requestInputFrame() = 0;
-    virtual void  onDamageReported() = 0;
-    virtual bool  shouldHandleSurfaceDamage(SP<CWLSurfaceResource> surface) = 0;
+    virtual void  render(Render::CRenderContext& ctx)                                                 = 0;
+    virtual void  damage()                                                                            = 0;
+    virtual void  requestInputFrame()                                                                 = 0;
+    virtual void  onDamageReported()                                                                  = 0;
+    virtual bool  shouldHandleSurfaceDamage(SP<CWLSurfaceResource> surface)                           = 0;
     virtual bool  shouldAllowSurfaceFrame(SP<CWLSurfaceResource> surface, const Time::steady_tp& now) = 0;
-    virtual bool  shouldAllowRealtimePreviewSchedule() = 0;
-    virtual bool  shouldSuppressRenderDamage() const = 0;
-    virtual void  onPreRender()      = 0;
+    virtual bool  shouldAllowRealtimePreviewSchedule()                                                = 0;
+    virtual bool  shouldSuppressRenderDamage() const                                                  = 0;
+    virtual void  onPreRender()                                                                       = 0;
 
     virtual void  setClosing(bool closing) = 0;
 
@@ -33,17 +33,17 @@ class IOverview {
     virtual void  onSwipeUpdate(double delta) = 0;
     virtual void  onSwipeEnd()                = 0;
 
-    virtual void  close()                  = 0;
-    virtual bool  isClosing() const        = 0;
-    virtual void  reopen()                 = 0;
-    virtual void  selectHoveredWorkspace() = 0;
-    virtual bool  moveSelection(const std::string& direction) = 0;
+    virtual void  close()                                           = 0;
+    virtual bool  isClosing() const                                 = 0;
+    virtual void  reopen()                                          = 0;
+    virtual void  selectHoveredWorkspace()                          = 0;
+    virtual bool  moveSelection(const std::string& direction)       = 0;
     virtual bool  windowDispatcherAction(const std::string& action) = 0;
 
     virtual void  fullRender(Render::CRenderContext& ctx) = 0;
     virtual void  syncAnimationConfig() {}
 
-    bool          blockDamageReporting   = false;
+    bool          blockDamageReporting = false;
 
     PHLMONITORREF pMonitor;
     bool          m_isSwiping = false;

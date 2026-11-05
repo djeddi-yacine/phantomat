@@ -23,11 +23,11 @@
 
 namespace SpatialOverview::Hud {
     namespace {
-        STheme   g_theme;
-        uint64_t g_themeFrame = std::numeric_limits<uint64_t>::max();
-        uint64_t g_frame      = 0;
-        std::string g_currentMonitor;
-        std::string g_themeMonitor;
+        STheme                                         g_theme;
+        uint64_t                                       g_themeFrame = std::numeric_limits<uint64_t>::max();
+        uint64_t                                       g_frame      = 0;
+        std::string                                    g_currentMonitor;
+        std::string                                    g_themeMonitor;
         std::unordered_map<std::string, SOutputColors> g_outputColors;
 
         struct SCachedLabel {
@@ -59,12 +59,12 @@ namespace SpatialOverview::Hud {
 
         struct SCachedGridTile {
             SP<Render::ITexture> texture;
-            std::string key;
+            std::string          key;
         };
         std::unordered_map<std::string, SCachedGridTile> g_gridTiles;
 
-        cairo_surface_t*     g_measureSurface = nullptr;
-        cairo_t*             g_measure        = nullptr;
+        cairo_surface_t*                                 g_measureSurface = nullptr;
+        cairo_t*                                         g_measure        = nullptr;
 
         // ---- colors ---------------------------------------------------------
 
@@ -188,8 +188,7 @@ namespace SpatialOverview::Hud {
             double      spacing = 0.0; // letter spacing, px
         };
 
-        PangoLayout* layoutFor(cairo_t* cr, const STextStyle& style, const std::string& markup, double maxWidth = -1,
-                               PangoEllipsizeMode ellipsize = PANGO_ELLIPSIZE_END) {
+        PangoLayout* layoutFor(cairo_t* cr, const STextStyle& style, const std::string& markup, double maxWidth = -1, PangoEllipsizeMode ellipsize = PANGO_ELLIPSIZE_END) {
             PangoLayout*          layout = pango_cairo_create_layout(cr);
             PangoFontDescription* desc   = pango_font_description_from_string(g_theme.font.c_str());
             pango_font_description_set_absolute_size(desc, style.px * PANGO_SCALE);
@@ -362,8 +361,8 @@ namespace SpatialOverview::Hud {
             if (DIST < 0.55)
                 return "In view";
             static constexpr const char* ARROWS[] = {"→", "↘", "↓", "↙", "←", "↖", "↑", "↗"};
-            const double ANGLE = std::atan2(DY, DX);
-            const int    INDEX = (sc<int>(std::round(ANGLE / (M_PI / 4.0))) + 8) % 8;
+            const double                 ANGLE    = std::atan2(DY, DX);
+            const int                    INDEX    = (sc<int>(std::round(ANGLE / (M_PI / 4.0))) + 8) % 8;
             return std::format("{} {:.1f} screens", ARROWS[INDEX], DIST);
         }
 
@@ -378,11 +377,17 @@ namespace SpatialOverview::Hud {
         };
 
         const std::vector<SHelpSection>& helpLeft() {
-            static const SHelpSection FIND{"Find", {{"Type", "Search"}, {"↑ ↓", "Move in results"}, {"⇥ ⇧⇥", "Next / prev"}, {"⌃1-9", "Jump to result"},
-                                                   {"↵", "Go to window"}, {"⇧↵", "Bring it here"}, {"Esc", "Clear, then back"}}};
-            static const SHelpSection PLACES{"Places", {{"Super 1-0", "Go to a place"}, {"Super ⇥ ⇧⇥", "Next / prev place"},
-                                                       {"Super ⇧ 1-0", "Take window along"}, {"Super ⇧ Alt 1-0", "Send window there"}}};
-            static const SHelpSection MOUSE{"Mouse", {{"Click", "Go to window"}, {"Drag", "Move or pan"}, {"Wheel", "Zoom"}, {"Minimap", "Jump"}}};
+            static const SHelpSection FIND{"Find",
+                                           {{"Type", "Search"},
+                                            {"↑ ↓", "Move in results"},
+                                            {"⇥ ⇧⇥", "Next / prev"},
+                                            {"⌃1-9", "Jump to result"},
+                                            {"↵", "Go to window"},
+                                            {"⇧↵", "Bring it here"},
+                                            {"Esc", "Clear, then back"}}};
+            static const SHelpSection PLACES{
+                "Places", {{"Super 1-0", "Go to a place"}, {"Super ⇥ ⇧⇥", "Next / prev place"}, {"Super ⇧ 1-0", "Take window along"}, {"Super ⇧ Alt 1-0", "Send window there"}}};
+            static const SHelpSection              MOUSE{"Mouse", {{"Click", "Go to window"}, {"Drag", "Move or pan"}, {"Wheel", "Zoom"}, {"Minimap", "Jump"}}};
             static const std::vector<SHelpSection> WITHPLACES{FIND, PLACES, MOUSE};
             static const std::vector<SHelpSection> WITHOUT{FIND, MOUSE};
             return ScrollOverview::Config::getCanvasPlaces() ? WITHPLACES : WITHOUT;
@@ -421,7 +426,7 @@ namespace SpatialOverview::Hud {
             const STextStyle KEY{.px = 12.0 * U * s, .weight = PANGO_WEIGHT_MEDIUM, .spacing = 0.8 * s};
             const STextStyle ACTION{.px = 11.0 * U * s, .weight = PANGO_WEIGHT_NORMAL, .spacing = 1.2 * s};
 
-            const auto COLUMN = [&](const std::vector<SHelpSection>& sections, double cx, double width) {
+            const auto       COLUMN = [&](const std::vector<SHelpSection>& sections, double cx, double width) {
                 double keyWidth = 64.0 * U * s;
                 for (const auto& section : sections) {
                     for (const auto& row : section.rows)
@@ -443,7 +448,7 @@ namespace SpatialOverview::Hud {
             COLUMN(helpRight(), x + w / 2.0 + 8.0 * s, w / 2.0 - 30.0 * s);
         }
 
-        constexpr double GAP    = 6.0;  // between cards
+        constexpr double GAP = 6.0; // between cards
 
         // A footer line under the rows ("+3 more", the tuner's description):
         // one row gap above its text, nothing below it but the padding.
@@ -452,7 +457,7 @@ namespace SpatialOverview::Hud {
         }
         constexpr double TUNER_ROW_H = 40.0;
 
-        std::string paletteKey(const SPaletteView& view, const Navigator::SState& state) {
+        std::string      paletteKey(const SPaletteView& view, const Navigator::SState& state) {
             std::string key = std::format("{}x{}@{:.3f}|{}|{}|{}|{}|{}|{}|{}|{}", view.monitorSize.x, view.monitorSize.y, view.scale, state.query, state.selected, state.listOffset,
                                           Navigator::listVisible(), state.helpOpen, state.caretVisible, state.switcher, g_theme.signature);
             if (state.tuner) {
@@ -479,8 +484,8 @@ namespace SpatialOverview::Hud {
 
         // The search field: a card with an optional glow and border, the
         // prompt, the query (or a placeholder), a block cursor and [ Esc ].
-        void searchField(cairo_t* cr, double x, double y, double w, double h, double s, const STheme& theme, const std::string& queryMarkup,
-                         const std::string& placeholder, bool caret) {
+        void searchField(cairo_t* cr, double x, double y, double w, double h, double s, const STheme& theme, const std::string& queryMarkup, const std::string& placeholder,
+                         bool caret) {
             const double R = theme.rounding * s;
             if (theme.searchGlow > 0.001) {
                 constexpr int LAYERS = 12;
@@ -508,15 +513,15 @@ namespace SpatialOverview::Hud {
             const STextStyle QUERY{.px = theme.querySize * s, .weight = PANGO_WEIGHT_MEDIUM, .spacing = 1.8 * s};
             const STextStyle SMALL{.px = (theme.detailSize + 1.0) * s, .weight = PANGO_WEIGHT_NORMAL, .spacing = 1.6 * s};
 
-            const double PROMPTW = drawText(cr, PROMPT, "&gt;_", x + 20.0 * s, CY, theme.accent);
-            const double TEXTX   = x + 20.0 * s + PROMPTW + 14.0 * s;
-            const auto   ESC     = ui("[ Esc ]");
-            const double ESCW    = measureText(SMALL, ESC);
-            const double TEXTMAX = x + w - TEXTX - ESCW - 40.0 * s;
-            const double CARETW  = theme.querySize * 0.53 * s;
-            const double CARETH  = theme.querySize * 1.3 * s;
+            const double     PROMPTW = drawText(cr, PROMPT, "&gt;_", x + 20.0 * s, CY, theme.accent);
+            const double     TEXTX   = x + 20.0 * s + PROMPTW + 14.0 * s;
+            const auto       ESC     = ui("[ Esc ]");
+            const double     ESCW    = measureText(SMALL, ESC);
+            const double     TEXTMAX = x + w - TEXTX - ESCW - 40.0 * s;
+            const double     CARETW  = theme.querySize * 0.53 * s;
+            const double     CARETH  = theme.querySize * 1.3 * s;
 
-            double caretX = TEXTX;
+            double           caretX = TEXTX;
             if (queryMarkup.empty())
                 drawText(cr, QUERY, placeholder, TEXTX + CARETW + 7.0 * s, CY, theme.textFaint, TEXTMAX);
             else
@@ -540,16 +545,16 @@ namespace SpatialOverview::Hud {
             } else
                 card(cr, x, y, w, h, R, theme);
 
-            const double     MID  = y + h / 2.0;
-            const auto       ON   = selected ? theme.onAccent : theme.text;
-            const auto       DIM  = selected ? withAlpha(theme.onAccent, 0.62F) : theme.textFaint;
-            const auto       HOT  = selected ? theme.onAccent : theme.accent;
+            const double     MID = y + h / 2.0;
+            const auto       ON  = selected ? theme.onAccent : theme.text;
+            const auto       DIM = selected ? withAlpha(theme.onAccent, 0.62F) : theme.textFaint;
+            const auto       HOT = selected ? theme.onAccent : theme.accent;
             const STextStyle TAG{.px = theme.detailSize * s, .weight = PANGO_WEIGHT_NORMAL, .spacing = 1.3 * s};
             const STextStyle NAME{.px = theme.titleSize * s, .weight = selected ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_MEDIUM, .spacing = 1.4 * s};
             const STextStyle VALUE{.px = (theme.detailSize + 1.0) * s, .weight = PANGO_WEIGHT_BOLD, .spacing = 1.2 * s};
 
-            const double VAL   = Tuning::get(param);
-            double       right = x + w - 16.0 * s;
+            const double     VAL   = Tuning::get(param);
+            double           right = x + w - 16.0 * s;
             if (param.kind == Tuning::EKind::BOOL) {
                 const double PW = 34.0 * s, PH = 18.0 * s, PX = right - PW;
                 const bool   YES = VAL >= 0.5;
@@ -579,7 +584,7 @@ namespace SpatialOverview::Hud {
                 right = SX - 12.0 * s;
             } else if (param.choices.empty()) {
                 const double SW = 150.0 * s, SH = 4.0 * s, SX = right - SW;
-                const double F  = Tuning::fraction(param, VAL);
+                const double F = Tuning::fraction(param, VAL);
                 roundedRect(cr, SX, MID - SH / 2.0, SW, SH, SH / 2.0);
                 setColor(cr, selected ? withAlpha(theme.onAccent, 0.22F) : withAlpha(theme.text, 0.10F));
                 cairo_fill(cr);
@@ -594,8 +599,7 @@ namespace SpatialOverview::Hud {
                 right = SX - 14.0 * s;
             }
 
-            auto value = param.kind == Tuning::EKind::COLOR && Tuning::format(param, VAL).starts_with('#') ? escape(Tuning::format(param, VAL)) :
-                                                                                                             ui(Tuning::format(param, VAL));
+            auto value = param.kind == Tuning::EKind::COLOR && Tuning::format(param, VAL).starts_with('#') ? escape(Tuning::format(param, VAL)) : ui(Tuning::format(param, VAL));
             if (!param.choices.empty() || param.kind == Tuning::EKind::COLOR)
                 value = "‹ " + value + " ›";
             const double VALW = measureText(VALUE, value);
@@ -619,12 +623,12 @@ namespace SpatialOverview::Hud {
     // ---- theme -----------------------------------------------------------------
 
     void refreshTheme() {
-        STheme theme;
+        STheme      theme;
         const auto* ACCENTPARAM = Tuning::find("navigator:accent");
         const auto  CONFIGURED  = ACCENTPARAM ? Tuning::text(*ACCENTPARAM) : ScrollOverview::Config::getNavigatorAccent();
-        CHyprColor accent{1.F, 0.42F, 0.1F, 1.F};
-        const auto PRESET = Tuning::presetValue(CONFIGURED);
-        const auto VALUE  = PRESET ? *PRESET : CONFIGURED;
+        CHyprColor  accent{1.F, 0.42F, 0.1F, 1.F};
+        const auto  PRESET = Tuning::presetValue(CONFIGURED);
+        const auto  VALUE  = PRESET ? *PRESET : CONFIGURED;
         if (const auto PARSED = parseHex(VALUE))
             accent = *PARSED;
         else if (VALUE == "auto") {
@@ -637,14 +641,14 @@ namespace SpatialOverview::Hud {
         const auto OUTPUTCOLORS = g_outputColors.find(g_currentMonitor);
         if (OUTPUTCOLORS != g_outputColors.end())
             accent = OUTPUTCOLORS->second.accent;
-        accent.a        = 1.F;
-        theme.accent    = accent;
+        accent.a     = 1.F;
+        theme.accent = accent;
         // Text on the accent is black or white, whichever contrasts more
         // (WCAG relative luminance).
         const auto  LINEAR    = [](float c) { return c <= 0.04045F ? c / 12.92F : std::pow((c + 0.055F) / 1.055F, 2.4F); };
         const float LUMINANCE = 0.2126F * LINEAR(accent.r) + 0.7152F * LINEAR(accent.g) + 0.0722F * LINEAR(accent.b);
         theme.onAccent        = (LUMINANCE + 0.05F) / 0.05F >= 1.05F / (LUMINANCE + 0.05F) ? CHyprColor{0.035F, 0.035F, 0.035F, 1.F} : CHyprColor{0.97F, 0.97F, 0.97F, 1.F};
-        const auto COLOR = [](const std::string& role) {
+        const auto COLOR      = [](const std::string& role) {
             return CHyprColor{sc<uint64_t>(ScrollOverview::Config::getValue<Config::INTEGER>("plugin:spatialoverview:navigator:colors:" + role))};
         };
         auto PANELCOLOR     = COLOR("panel");
@@ -654,11 +658,11 @@ namespace SpatialOverview::Hud {
         auto TEXTDIMCOLOR   = COLOR("text_dim");
         auto TEXTFAINTCOLOR = COLOR("text_faint");
         if (OUTPUTCOLORS != g_outputColors.end()) {
-            PANELCOLOR = OUTPUTCOLORS->second.panel;
-            CARDCOLOR = OUTPUTCOLORS->second.card;
-            EDGECOLOR = OUTPUTCOLORS->second.edge;
-            TEXTCOLOR = OUTPUTCOLORS->second.text;
-            TEXTDIMCOLOR = OUTPUTCOLORS->second.textDim;
+            PANELCOLOR     = OUTPUTCOLORS->second.panel;
+            CARDCOLOR      = OUTPUTCOLORS->second.card;
+            EDGECOLOR      = OUTPUTCOLORS->second.edge;
+            TEXTCOLOR      = OUTPUTCOLORS->second.text;
+            TEXTDIMCOLOR   = OUTPUTCOLORS->second.textDim;
             TEXTFAINTCOLOR = OUTPUTCOLORS->second.textFaint;
         }
         theme.panel     = PANELCOLOR;
@@ -672,60 +676,60 @@ namespace SpatialOverview::Hud {
             theme.font = "Monospace";
 
         using Tuning::number, Tuning::flag;
-        theme.hudScale   = number("navigator:hud_scale");
-        theme.width      = number("navigator:width");
-        theme.top        = number("navigator:top");
-        theme.rows       = std::max(1, sc<int>(number("navigator:rows")));
-        theme.rowH       = number("navigator:row_height");
-        theme.searchH    = number("navigator:search_height");
-        theme.rounding   = number("navigator:rounding");
-        theme.tracking   = number("navigator:letter_spacing");
-        theme.uppercase  = flag("navigator:uppercase");
-        theme.corners    = flag("navigator:corner_labels");
-        theme.querySize  = number("navigator:query_size");
-        theme.titleSize  = number("navigator:title_size");
-        theme.detailSize = number("navigator:detail_size");
-        theme.cornerSize = number("navigator:corner_size");
-        theme.labelSize  = number("navigator:label_size");
-        theme.searchBorder = number("navigator:search_border");
-        theme.searchGlow   = number("navigator:search_glow");
+        theme.hudScale        = number("navigator:hud_scale");
+        theme.width           = number("navigator:width");
+        theme.top             = number("navigator:top");
+        theme.rows            = std::max(1, sc<int>(number("navigator:rows")));
+        theme.rowH            = number("navigator:row_height");
+        theme.searchH         = number("navigator:search_height");
+        theme.rounding        = number("navigator:rounding");
+        theme.tracking        = number("navigator:letter_spacing");
+        theme.uppercase       = flag("navigator:uppercase");
+        theme.corners         = flag("navigator:corner_labels");
+        theme.querySize       = number("navigator:query_size");
+        theme.titleSize       = number("navigator:title_size");
+        theme.detailSize      = number("navigator:detail_size");
+        theme.cornerSize      = number("navigator:corner_size");
+        theme.labelSize       = number("navigator:label_size");
+        theme.searchBorder    = number("navigator:search_border");
+        theme.searchGlow      = number("navigator:search_glow");
         theme.panelPad        = number("navigator:panel_padding");
         theme.panelShadow     = number("navigator:panel_shadow");
         theme.panelShadowSize = number("navigator:panel_shadow_size");
         // Lower panel opacity turns the whole palette to glass, rows included.
         const float PANELALPHA = sc<float>(number("navigator:panel_opacity"));
-        theme.panel.a          *= PANELALPHA;
-        theme.card.a           *= std::min(0.96F, PANELALPHA + 0.02F);
-        theme.searchEdge       = accent;
+        theme.panel.a *= PANELALPHA;
+        theme.card.a *= std::min(0.96F, PANELALPHA + 0.02F);
+        theme.searchEdge = accent;
         if (const auto EDGE = parseHex(ScrollOverview::Config::getValue<std::string>("plugin:spatialoverview:navigator:search_border_color")))
             theme.searchEdge = *EDGE;
         theme.searchEdge.a = sc<float>(number("navigator:search_border_opacity"));
 
         theme.signature = std::format("{}{}{}|{}|{:.3f}|{:.1f}|{:.4f}|{}|{:.1f}|{:.1f}|{:.1f}|{:.2f}|{}{}|{:.2f}|{:.2f}|{:.2f}|{:.2f}|{:.2f}|{:.2f}|{:.2f}|{}{:.2f}",
-                                      hex(theme.accent), hex(theme.card), hex(theme.searchEdge), theme.font, theme.hudScale, theme.width, theme.top, theme.rows,
-                                      theme.rowH, theme.searchH, theme.rounding, theme.tracking, theme.uppercase, theme.corners, theme.querySize, theme.titleSize,
-                                      theme.detailSize, theme.cornerSize, theme.labelSize, theme.searchBorder, theme.searchGlow, PANELALPHA, theme.searchEdge.a) +
-            std::format("|{:.1f}|{:.2f}|{:.1f}|{:08x}{:08x}{:08x}{:08x}{:08x}{:08x}", theme.panelPad, theme.panelShadow, theme.panelShadowSize,
-                        PANELCOLOR.getAsHex(), CARDCOLOR.getAsHex(), EDGECOLOR.getAsHex(), TEXTCOLOR.getAsHex(), TEXTDIMCOLOR.getAsHex(), TEXTFAINTCOLOR.getAsHex());
+                                      hex(theme.accent), hex(theme.card), hex(theme.searchEdge), theme.font, theme.hudScale, theme.width, theme.top, theme.rows, theme.rowH,
+                                      theme.searchH, theme.rounding, theme.tracking, theme.uppercase, theme.corners, theme.querySize, theme.titleSize, theme.detailSize,
+                                      theme.cornerSize, theme.labelSize, theme.searchBorder, theme.searchGlow, PANELALPHA, theme.searchEdge.a) +
+            std::format("|{:.1f}|{:.2f}|{:.1f}|{:08x}{:08x}{:08x}{:08x}{:08x}{:08x}", theme.panelPad, theme.panelShadow, theme.panelShadowSize, PANELCOLOR.getAsHex(),
+                        CARDCOLOR.getAsHex(), EDGECOLOR.getAsHex(), TEXTCOLOR.getAsHex(), TEXTDIMCOLOR.getAsHex(), TEXTFAINTCOLOR.getAsHex());
         g_theme = theme;
     }
 
     void setOutputColors(std::unordered_map<std::string, SOutputColors> colors) {
         g_outputColors = std::move(colors);
-        g_themeFrame = std::numeric_limits<uint64_t>::max();
+        g_themeFrame   = std::numeric_limits<uint64_t>::max();
     }
 
     void beginFrame(const std::string& monitorName) {
         if (g_currentMonitor != monitorName) {
             g_currentMonitor = monitorName;
-            g_themeFrame = std::numeric_limits<uint64_t>::max();
+            g_themeFrame     = std::numeric_limits<uint64_t>::max();
         }
     }
 
     const STheme& theme() {
         if (g_themeFrame != g_frame || g_themeMonitor != g_currentMonitor) {
             refreshTheme();
-            g_themeFrame = g_frame;
+            g_themeFrame   = g_frame;
             g_themeMonitor = g_currentMonitor;
         }
         return g_theme;
@@ -739,9 +743,9 @@ namespace SpatialOverview::Hud {
         if (!STATE.open || view.monitorSize.x <= 0 || view.monitorSize.y <= 0)
             return false;
 
-        const auto& THEME = theme();
-        const auto  KEY   = paletteKey(view, STATE);
-        auto& cachedPalette = g_palettes[view.monitorName];
+        const auto& THEME         = theme();
+        const auto  KEY           = paletteKey(view, STATE);
+        auto&       cachedPalette = g_palettes[view.monitorName];
         if (cachedPalette.texture && cachedPalette.key == KEY) {
             texture = cachedPalette.texture;
             box     = cachedPalette.box;
@@ -768,17 +772,17 @@ namespace SpatialOverview::Hud {
         const double HELPH   = HELP ? helpHeight(s) : 0.0;
         const double SEARCHH = THEME.searchH * s;
 
-        double innerH = SEARCHH;
+        double       innerH = SEARCHH;
         if (LIST || TUNER)
             innerH += GAP * s + ROWS * ROWH + (ROWS - 1) * GAP * s + (FOOTER ? FOOTH : 0.0);
         if (HELP)
             innerH += GAP * s + HELPH;
         const double CONTAINERH = innerH + PAD * 2.0 * s;
 
-        const int TEXW    = sc<int>(std::ceil(W + M * 2.0));
-        const int TEXH    = sc<int>(std::ceil(CONTAINERH + M * 2.0));
-        auto*     surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, TEXW, TEXH);
-        auto*     cr      = cairo_create(surface);
+        const int    TEXW    = sc<int>(std::ceil(W + M * 2.0));
+        const int    TEXH    = sc<int>(std::ceil(CONTAINERH + M * 2.0));
+        auto*        surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, TEXW, TEXH);
+        auto*        cr      = cairo_create(surface);
         cairo_set_antialias(cr, CAIRO_ANTIALIAS_BEST);
 
         std::vector<CBox>                 panels{CBox{M, M, W, CONTAINERH}};
@@ -808,8 +812,8 @@ namespace SpatialOverview::Hud {
             searchField(cr, X, y, INNERW, SEARCHH, s, THEME, STATE.tunerQuery.empty() ? "" : caseMarkup(STATE.tunerQuery), ui("Tune the look  //  type to filter"),
                         STATE.caretVisible);
         else
-            searchField(cr, X, y, INNERW, SEARCHH, s, THEME, STATE.query.empty() ? "" : caseMarkup(STATE.query),
-                        ui(STATE.switcher ? "Recent windows" : "Search windows"), STATE.caretVisible);
+            searchField(cr, X, y, INNERW, SEARCHH, s, THEME, STATE.query.empty() ? "" : caseMarkup(STATE.query), ui(STATE.switcher ? "Recent windows" : "Search windows"),
+                        STATE.caretVisible);
         y += SEARCHH;
 
         if (TUNER) {
@@ -843,7 +847,7 @@ namespace SpatialOverview::Hud {
             const double     WELL = std::clamp(THEME.rowH * 0.62, 16.0, 72.0) * s;
             // Title over detail, centered as a pair in the row.
             const double TITLEH = THEME.titleSize * 1.25 * s, DETAILH = THEME.detailSize * 1.25 * s, LINEGAP = 3.5 * s;
-            const double TITLEDY = -(TITLEH + LINEGAP + DETAILH) / 2.0 + TITLEH / 2.0;
+            const double TITLEDY  = -(TITLEH + LINEGAP + DETAILH) / 2.0 + TITLEH / 2.0;
             const double DETAILDY = (TITLEH + LINEGAP + DETAILH) / 2.0 - DETAILH / 2.0;
 
             y += GAP * s;
@@ -880,8 +884,7 @@ namespace SpatialOverview::Hud {
                     const auto   TEXT   = ui("Enter");
                     const double BADGEW = measureText(BADGE, TEXT) + 26.0 * s;
                     const double BADGEH = std::min(34.0, THEME.rowH * 0.59) * s;
-                    roundedRect(cr, rightEdge - BADGEW + 4.0 * s, MID - BADGEH / 2.0, BADGEW, BADGEH,
-                                interfaceRadius(std::min(7.0 * s, BADGEH / 2.0), THEME));
+                    roundedRect(cr, rightEdge - BADGEW + 4.0 * s, MID - BADGEH / 2.0, BADGEW, BADGEH, interfaceRadius(std::min(7.0 * s, BADGEH / 2.0), THEME));
                     setColor(cr, THEME.onAccent);
                     cairo_fill(cr);
                     drawText(cr, BADGE, TEXT, rightEdge - BADGEW + 4.0 * s + 13.0 * s, MID, THEME.accent);
@@ -893,11 +896,10 @@ namespace SpatialOverview::Hud {
                     rightEdge -= HINTW + 16.0 * s;
                 }
 
-                const double TX   = X + 11.0 * s + WELL + 16.0 * s;
-                const double TMAX = rightEdge - TX;
-                const auto   ON   = SELECTED ? THEME.onAccent : THEME.text;
-                const auto   TITLEMARKUP =
-                    matchedMarkup(Navigator::displayTitle(WINDOW), RESULT.titleMatches, SELECTED ? std::nullopt : std::optional<CHyprColor>{THEME.accent});
+                const double TX          = X + 11.0 * s + WELL + 16.0 * s;
+                const double TMAX        = rightEdge - TX;
+                const auto   ON          = SELECTED ? THEME.onAccent : THEME.text;
+                const auto   TITLEMARKUP = matchedMarkup(Navigator::displayTitle(WINDOW), RESULT.titleMatches, SELECTED ? std::nullopt : std::optional<CHyprColor>{THEME.accent});
                 drawText(cr, SELECTED ? TITLESEL : TITLE, TITLEMARKUP, TX, MID + TITLEDY, ON, TMAX);
 
                 auto meta = matchedMarkup(Navigator::displayClass(WINDOW), RESULT.classMatches, SELECTED ? std::nullopt : std::optional<CHyprColor>{THEME.accent});
@@ -927,14 +929,14 @@ namespace SpatialOverview::Hud {
         if (!uploaded)
             return false;
 
-        const Vector2D FULL = view.monitorSize * view.scale;
-        cachedPalette.key       = KEY;
-        cachedPalette.texture   = uploaded;
-        cachedPalette.panels    = std::move(panels);
-        cachedPalette.rows      = std::move(rows);
-        cachedPalette.box       = CBox{std::round((FULL.x - TEXW) / 2.0), std::round(FULL.y * THEME.top - M), sc<double>(TEXW), sc<double>(TEXH)};
-        texture                 = cachedPalette.texture;
-        box                     = cachedPalette.box;
+        const Vector2D FULL   = view.monitorSize * view.scale;
+        cachedPalette.key     = KEY;
+        cachedPalette.texture = uploaded;
+        cachedPalette.panels  = std::move(panels);
+        cachedPalette.rows    = std::move(rows);
+        cachedPalette.box     = CBox{std::round((FULL.x - TEXW) / 2.0), std::round(FULL.y * THEME.top - M), sc<double>(TEXW), sc<double>(TEXH)};
+        texture               = cachedPalette.texture;
+        box                   = cachedPalette.box;
         return true;
     }
 
@@ -950,7 +952,7 @@ namespace SpatialOverview::Hud {
         if (cached == g_palettes.end() || !cached->second.texture || !Navigator::isOpen())
             return PALETTE_MISS;
         const auto& palette = cached->second;
-        const auto LOCAL = point - palette.box.pos();
+        const auto  LOCAL   = point - palette.box.pos();
         for (const auto& row : palette.rows) {
             if (!row.box.containsPoint(LOCAL))
                 continue;
@@ -975,14 +977,14 @@ namespace SpatialOverview::Hud {
         if (!STATE.open || view.monitorSize.x <= 0 || view.monitorSize.y <= 0)
             return false;
 
-        const auto& THEME  = theme();
+        const auto& THEME = theme();
         if (!THEME.corners)
             return false;
-        const int   TOTAL  = Navigator::candidateCount();
-        const int   COUNT  = sc<int>(STATE.results.size());
-        const bool  LIST   = Navigator::listVisible() && !STATE.tuner;
-        const auto  ACCENT = hex(THEME.accent);
-        const auto  K      = [&ACCENT](const char* key, const char* what) { return std::format("<span foreground=\"{}\">{}</span> {}", ACCENT, ui(key), ui(what)); };
+        const int  TOTAL  = Navigator::candidateCount();
+        const int  COUNT  = sc<int>(STATE.results.size());
+        const bool LIST   = Navigator::listVisible() && !STATE.tuner;
+        const auto ACCENT = hex(THEME.accent);
+        const auto K      = [&ACCENT](const char* key, const char* what) { return std::format("<span foreground=\"{}\">{}</span> {}", ACCENT, ui(key), ui(what)); };
 
         struct SBlock {
             std::vector<std::pair<std::string, CHyprColor>> lines; // markup, color
@@ -995,24 +997,22 @@ namespace SpatialOverview::Hud {
             blocks[0].lines.push_back({ui("[ Exp  //  ") + caseMarkup(view.experiment) + " ]", THEME.accent});
 
         blocks[1].right = true;
-        blocks[1].lines.push_back({ui(std::format("Zoom {:03d}%  //  {:02d} windows  //  ", sc<int>(std::round(view.zoom * 100.F)), TOTAL)) + caseMarkup(view.monitorName),
-                                   THEME.textDim});
+        blocks[1].lines.push_back(
+            {ui(std::format("Zoom {:03d}%  //  {:02d} windows  //  ", sc<int>(std::round(view.zoom * 100.F)), TOTAL)) + caseMarkup(view.monitorName), THEME.textDim});
         if (LIST && COUNT > 0)
             blocks[1].lines.push_back({std::format("[ {:02d} / {:02d} ]", STATE.selected + 1, COUNT), THEME.accent});
         else if (Navigator::queryActive())
             blocks[1].lines.push_back({"[ 00 / 00 ]", THEME.accent});
-        blocks[1].lines.push_back(
-            {"&gt;_" + ui(STATE.tuner ? "Tuning" : STATE.switcher ? "Release Alt" : LIST ? "Enter" : "Type to search"), THEME.accent});
+        blocks[1].lines.push_back({"&gt;_" + ui(STATE.tuner ? "Tuning" : STATE.switcher ? "Release Alt" : LIST ? "Enter" : "Type to search"), THEME.accent});
 
         if (!STATE.notice.empty())
             blocks[2].lines.push_back({caseMarkup(STATE.notice), THEME.accent});
         else if (STATE.tuner) {
             blocks[2].lines.push_back({ui("Saved as you go to ") + escape(homeRelative(Tuning::filePath())), THEME.textFaint});
-            blocks[2].lines.push_back({K("↑↓", "Pick") + "   " + K("←→", "Adjust") + "   " + K("⇧", "Fine") + "   " + K("⌃", "×10") + "   " + K("Del", "Revert") +
-                                           "   " + K("Esc", "Done"),
-                                       THEME.textDim});
-        }
-        else if (STATE.switcher)
+            blocks[2].lines.push_back(
+                {K("↑↓", "Pick") + "   " + K("←→", "Adjust") + "   " + K("⇧", "Fine") + "   " + K("⌃", "×10") + "   " + K("Del", "Revert") + "   " + K("Esc", "Done"),
+                 THEME.textDim});
+        } else if (STATE.switcher)
             blocks[2].lines.push_back({K("⇥", "Next") + "   " + K("⇧⇥", "Back") + "   " + K("Esc", "Cancel"), THEME.textDim});
         else
             blocks[2].lines.push_back({K("↵", "Go") + "   " + K("⇥", "Next") + "   " + K("⇧↵", "Bring here") + "   " + K("⌃0", "Fit all") + "   " + K("⌃,", "Tune") + "   " +
@@ -1023,7 +1023,7 @@ namespace SpatialOverview::Hud {
         const STextStyle STYLE{.px = THEME.cornerSize * s, .weight = PANGO_WEIGHT_MEDIUM, .spacing = 2.2 * s};
         const double     LINE = THEME.cornerSize * 1.83 * s;
 
-        std::string key = std::format("{}x{}@{:.3f}|{}", view.monitorSize.x, view.monitorSize.y, view.scale, THEME.signature);
+        std::string      key = std::format("{}x{}@{:.3f}|{}", view.monitorSize.x, view.monitorSize.y, view.scale, THEME.signature);
         for (const auto& block : blocks) {
             for (const auto& [markup, color] : block.lines)
                 key += "|" + markup + hex(color);
@@ -1060,7 +1060,7 @@ namespace SpatialOverview::Hud {
             const auto  SIZE  = sizes[i];
             for (size_t line = 0; line < BLOCK.lines.size(); ++line) {
                 const auto& [markup, color] = BLOCK.lines[line];
-                const double LX              = BLOCK.right ? SIZE.x - 2.0 * s - measureText(STYLE, markup) : 2.0 * s;
+                const double LX             = BLOCK.right ? SIZE.x - 2.0 * s - measureText(STYLE, markup) : 2.0 * s;
                 drawText(cr, STYLE, markup, LX, ay + line * LINE + LINE / 2.0, color);
             }
             CBox screen;
@@ -1070,8 +1070,7 @@ namespace SpatialOverview::Hud {
                 screen = CBox{FULL.x - MARGIN - SIZE.x, MARGIN * 0.8, SIZE.x, SIZE.y};
             else
                 screen = CBox{MARGIN, FULL.y - MARGIN * 0.8 - SIZE.y, SIZE.x, SIZE.y};
-            result.regions.push_back(
-                {.screen = screen.round(), .uv = {0.F, sc<float>(ay / atlasH), sc<float>(SIZE.x / atlasW), sc<float>(SIZE.y / atlasH)}});
+            result.regions.push_back({.screen = screen.round(), .uv = {0.F, sc<float>(ay / atlasH), sc<float>(SIZE.x / atlasW), sc<float>(SIZE.y / atlasH)}});
             ay += SIZE.y + 2.0;
         }
 
@@ -1082,7 +1081,7 @@ namespace SpatialOverview::Hud {
             return false;
 
         cachedChrome = SCachedChrome{.key = key, .chrome = result};
-        out      = result;
+        out          = result;
         return true;
     }
 
@@ -1097,9 +1096,9 @@ namespace SpatialOverview::Hud {
         if (cell < 2.0)
             return nullptr;
 
-        const auto COLOR = theme().textDim;
-        const auto KEY = std::format("{}|{}|{}|{}|{:08x}", cell, mark, fine, style, COLOR.getAsHex());
-        auto& cachedTile = g_gridTiles[g_currentMonitor];
+        const auto COLOR      = theme().textDim;
+        const auto KEY        = std::format("{}|{}|{}|{}|{:08x}", cell, mark, fine, style, COLOR.getAsHex());
+        auto&      cachedTile = g_gridTiles[g_currentMonitor];
         if (cachedTile.texture && cachedTile.key == KEY)
             return cachedTile.texture;
 
@@ -1139,7 +1138,7 @@ namespace SpatialOverview::Hud {
 
         cairo_destroy(cr);
         cachedTile.texture = upload(surface);
-        cachedTile.key = cachedTile.texture ? KEY : std::string{};
+        cachedTile.key     = cachedTile.texture ? KEY : std::string{};
         cairo_surface_destroy(surface);
         return cachedTile.texture;
     }
@@ -1160,8 +1159,8 @@ namespace SpatialOverview::Hud {
         const STextStyle STYLE{.px = THEME.labelSize * s, .weight = selected ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_MEDIUM, .spacing = 1.3 * s};
         const auto       TITLE = caseMarkup(Navigator::displayTitle(window));
 
-        const auto WIDTHKEY = std::format("{}\x1f{}\x1f{:.2f}\x1f{}", TITLE, selected, s, THEME.signature);
-        auto       measured = g_labelWidths.find(WIDTHKEY);
+        const auto       WIDTHKEY = std::format("{}\x1f{}\x1f{:.2f}\x1f{}", TITLE, selected, s, THEME.signature);
+        auto             measured = g_labelWidths.find(WIDTHKEY);
         if (measured == g_labelWidths.end()) {
             if (g_labelWidths.size() > 2048)
                 g_labelWidths.clear();
@@ -1172,7 +1171,7 @@ namespace SpatialOverview::Hud {
         // Width buckets keep zoom animations from re-rendering every frame.
         const double WIDTH = NATURAL <= LIMIT ? NATURAL : std::max(48.0 * s, std::floor(LIMIT / (24.0 * s)) * 24.0 * s);
 
-        const auto KEY = std::format("{}\x1f{}\x1f{:.2f}\x1f{}\x1f{}\x1f{}", TITLE, window->metadata().appID(), s, sc<int>(WIDTH), selected, THEME.signature);
+        const auto   KEY = std::format("{}\x1f{}\x1f{:.2f}\x1f{}\x1f{}\x1f{}", TITLE, window->metadata().appID(), s, sc<int>(WIDTH), selected, THEME.signature);
         if (const auto IT = g_labels.find(KEY); IT != g_labels.end()) {
             IT->second.lastUsed = g_frame;
             return IT->second.label;

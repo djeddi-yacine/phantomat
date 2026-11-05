@@ -13,8 +13,8 @@
 
 inline HANDLE SCROLLOVERVIEW_HANDLE = nullptr;
 
-bool ensureScrollOverviewHooks();
-void disableScrollOverviewHooks();
+bool          ensureScrollOverviewHooks();
+void          disableScrollOverviewHooks();
 
 // Hyprland 0.57 workspace IDs are a numbered/special variant. The plugin keys
 // per-workspace state by a stable integer: the number, or a negative hash of
@@ -22,7 +22,7 @@ void disableScrollOverviewHooks();
 using WORKSPACEID                       = int64_t;
 constexpr WORKSPACEID WORKSPACE_INVALID = -1;
 
-inline WORKSPACEID workspaceID(const PHLWORKSPACE& workspace) {
+inline WORKSPACEID    workspaceID(const PHLWORKSPACE& workspace) {
     if (!workspace)
         return WORKSPACE_INVALID;
     if (const auto NUMBER = workspace->numberedID())

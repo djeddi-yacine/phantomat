@@ -12,12 +12,12 @@ class CScrollOverviewPassElement : public IPassElement {
     ePassElementType              type() override {
         return EK_CUSTOM;
     }
-    bool                          needsLiveBlur(Render::CRenderContext& ctx) override;
-    bool                          needsPrecomputeBlur(Render::CRenderContext& ctx) override;
-    std::optional<CBox>           boundingBox(Render::CRenderContext& ctx) override;
-    CRegion                       opaqueRegion(Render::CRenderContext& ctx) override;
+    bool                needsLiveBlur(Render::CRenderContext& ctx) override;
+    bool                needsPrecomputeBlur(Render::CRenderContext& ctx) override;
+    std::optional<CBox> boundingBox(Render::CRenderContext& ctx) override;
+    CRegion             opaqueRegion(Render::CRenderContext& ctx) override;
 
-    const char*                   passName() override {
+    const char*         passName() override {
         return "CScrollOverviewPassElement";
     }
 };
@@ -25,16 +25,16 @@ class CScrollOverviewPassElement : public IPassElement {
 class COverviewShadowPassElement : public IPassElement {
   public:
     struct SData {
-        PHLMONITORREF monitor;
-        CBox          fullBox;
-        CBox          cutoutBox;
-        int           rounding      = 0;
-        float         roundingPower = 2.F;
-        int           range         = 0;
-        int           renderPower   = 0;
+        PHLMONITORREF              monitor;
+        CBox                       fullBox;
+        CBox                       cutoutBox;
+        int                        rounding      = 0;
+        float                      roundingPower = 2.F;
+        int                        range         = 0;
+        int                        renderPower   = 0;
         Config::CGradientValueData color;
-        float         alpha        = 1.F;
-        bool          ignoreWindow = true;
+        float                      alpha        = 1.F;
+        bool                       ignoreWindow = true;
     };
 
     COverviewShadowPassElement(const SData& data_);
@@ -44,12 +44,12 @@ class COverviewShadowPassElement : public IPassElement {
     ePassElementType              type() override {
         return EK_CUSTOM;
     }
-    bool                          needsLiveBlur(Render::CRenderContext& ctx) override;
-    bool                          needsPrecomputeBlur(Render::CRenderContext& ctx) override;
-    std::optional<CBox>           boundingBox(Render::CRenderContext& ctx) override;
-    CRegion                       opaqueRegion(Render::CRenderContext& ctx) override;
+    bool                needsLiveBlur(Render::CRenderContext& ctx) override;
+    bool                needsPrecomputeBlur(Render::CRenderContext& ctx) override;
+    std::optional<CBox> boundingBox(Render::CRenderContext& ctx) override;
+    CRegion             opaqueRegion(Render::CRenderContext& ctx) override;
 
-    const char*                   passName() override {
+    const char*         passName() override {
         return "COverviewShadowPassElement";
     }
 

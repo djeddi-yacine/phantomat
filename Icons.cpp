@@ -27,12 +27,12 @@ namespace SpatialOverview::Icons {
             std::unordered_map<std::string, std::string> byName;
         };
 
-        std::optional<SIndex>                                          g_index;
-        std::vector<std::string>                                       g_themes;
-        std::unordered_map<std::string, std::unique_ptr<Hyprgraphics::CImage>> g_images;   // path@size
-        std::unordered_map<std::string, std::string>                   g_paths;            // class -> icon path ("" = none)
+        std::optional<SIndex>                                                  g_index;
+        std::vector<std::string>                                               g_themes;
+        std::unordered_map<std::string, std::unique_ptr<Hyprgraphics::CImage>> g_images; // path@size
+        std::unordered_map<std::string, std::string>                           g_paths;  // class -> icon path ("" = none)
 
-        std::string lower(std::string value) {
+        std::string                                                            lower(std::string value) {
             std::ranges::transform(value, value.begin(), [](unsigned char c) { return sc<char>(std::tolower(c)); });
             return value;
         }
@@ -48,7 +48,7 @@ namespace SpatialOverview::Icons {
 
         std::vector<fs::path> dataDirs() {
             std::vector<fs::path> dirs{env("XDG_DATA_HOME", home() + "/.local/share")};
-            std::string           rest = env("XDG_DATA_DIRS", "/usr/local/share:/usr/share");
+            std::string           rest  = env("XDG_DATA_DIRS", "/usr/local/share:/usr/share");
             size_t                start = 0;
             while (start <= rest.size()) {
                 const auto END = rest.find(':', start);
@@ -158,7 +158,7 @@ namespace SpatialOverview::Icons {
                 while (std::getline(in, line)) {
                     if (!line.starts_with("Inherits="))
                         continue;
-                    std::string rest = line.substr(9);
+                    std::string rest  = line.substr(9);
                     size_t      start = 0;
                     while (start < rest.size()) {
                         const auto END = rest.find(',', start);
@@ -205,8 +205,8 @@ namespace SpatialOverview::Icons {
             if (name.starts_with('/'))
                 return fs::is_regular_file(name, error) ? name : std::string{};
 
-            static constexpr const char* SUBDIRS[] = {"scalable/apps", "512x512/apps", "256x256@2x/apps", "256x256/apps", "128x128/apps", "96x96/apps",
-                                                      "64x64/apps",    "48x48@2x/apps", "48x48/apps",     "32x32@2x/apps", "32x32/apps"};
+            static constexpr const char* SUBDIRS[] = {"scalable/apps", "512x512/apps",  "256x256@2x/apps", "256x256/apps",  "128x128/apps", "96x96/apps",
+                                                      "64x64/apps",    "48x48@2x/apps", "48x48/apps",      "32x32@2x/apps", "32x32/apps"};
             for (const auto& theme : themes()) {
                 for (const auto& root : iconRoots()) {
                     const auto BASE = root / theme;

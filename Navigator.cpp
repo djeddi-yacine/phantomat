@@ -35,8 +35,9 @@ ECanvasWindowCategory canvasWindowCategory(const PHLWINDOW& window) {
 
     if (canvasContainsAny(CLASS, {"foot", "alacritty", "kitty", "ghostty", "wezterm", "konsole", "terminal"}))
         return ECanvasWindowCategory::TERMINAL;
-    if (canvasContainsAny(ALL, {"slack", "discord", "msteams", "microsoft teams", "signal", "telegram", "whatsapp", "mattermost", "element", "gmail",
-                                "mail.google", "outlook", "thunderbird", "hey.com", " imbox", " inbox"}))
+    if (canvasContainsAny(ALL,
+                          {"slack", "discord", "msteams", "microsoft teams", "signal", "telegram", "whatsapp", "mattermost", "element", "gmail", "mail.google", "outlook",
+                           "thunderbird", "hey.com", " imbox", " inbox"}))
         return ECanvasWindowCategory::COMMUNICATION;
     if (canvasContainsAny(CLASS, {"chromium", "chrome", "firefox", "brave", "vivaldi", "zen", "browser"}))
         return ECanvasWindowCategory::BROWSER;
@@ -51,21 +52,21 @@ ECanvasWindowCategory canvasWindowCategory(const PHLWINDOW& window) {
 
 namespace SpatialOverview::Navigator {
     namespace {
-        SState                                  g_state;
-        std::function<void()>                   g_damage;
-        wl_event_source*                        g_tickTimer = nullptr;
-        std::unordered_map<uint64_t, uint64_t>  g_focusStamps;
-        uint64_t                                g_focusCounter = 0;
-        std::vector<PHLWINDOWREF>               g_sessionOrder;
-        PHLWORKSPACEREF                         g_sessionWorkspace;
-        std::unordered_set<uint32_t>            g_consumedKeys;
+        SState                                 g_state;
+        std::function<void()>                  g_damage;
+        wl_event_source*                       g_tickTimer = nullptr;
+        std::unordered_map<uint64_t, uint64_t> g_focusStamps;
+        uint64_t                               g_focusCounter = 0;
+        std::vector<PHLWINDOWREF>              g_sessionOrder;
+        PHLWORKSPACEREF                        g_sessionWorkspace;
+        std::unordered_set<uint32_t>           g_consumedKeys;
 
-        wl_event_source*                        g_repeatTimer = nullptr;
-        SRepeatKey                              g_repeatKey;
-        int                                     g_repeatIntervalMs = 40;
-        std::function<void(const SRepeatKey&)>  g_repeatHandler;
+        wl_event_source*                       g_repeatTimer = nullptr;
+        SRepeatKey                             g_repeatKey;
+        int                                    g_repeatIntervalMs = 40;
+        std::function<void(const SRepeatKey&)> g_repeatHandler;
 
-        constexpr int CARET_BLINK_MS = 530;
+        constexpr int                          CARET_BLINK_MS = 530;
 
         // One folded character per source codepoint, so match positions map
         // straight back onto the text that is displayed.
@@ -107,11 +108,11 @@ namespace SpatialOverview::Navigator {
         }
 
         gunichar foldChar(gunichar c) {
-            char        buffer[8];
-            const int   LENGTH = g_unichar_to_utf8(c, buffer);
-            gchar*      folded = g_utf8_casefold(buffer, LENGTH);
-            gchar*      nfd    = folded ? g_utf8_normalize(folded, -1, G_NORMALIZE_NFD) : nullptr;
-            gunichar    result = g_unichar_tolower(c);
+            char      buffer[8];
+            const int LENGTH = g_unichar_to_utf8(c, buffer);
+            gchar*    folded = g_utf8_casefold(buffer, LENGTH);
+            gchar*    nfd    = folded ? g_utf8_normalize(folded, -1, G_NORMALIZE_NFD) : nullptr;
+            gunichar  result = g_unichar_tolower(c);
             for (const gchar* p = nfd; p && *p; p = g_utf8_next_char(p)) {
                 const gunichar D = g_utf8_get_char(p);
                 if (g_unichar_ismark(D))
@@ -214,7 +215,7 @@ namespace SpatialOverview::Navigator {
 
         std::unordered_map<uint64_t, SWindowFields> g_fieldCache;
 
-        const SWindowFields& fieldsFor(const PHLWINDOW& window) {
+        const SWindowFields&                        fieldsFor(const PHLWINDOW& window) {
             const auto TITLE = displayTitle(window);
             const auto CLASS = displayClass(window);
             auto&      entry = g_fieldCache[window->metadata().stableID()];
@@ -229,9 +230,9 @@ namespace SpatialOverview::Navigator {
         }
 
         void ensureSelectionVisible() {
-            const int     ROWS  = std::max(1, sc<int>(Tuning::number("navigator:rows")));
-            const int     COUNT = sc<int>(g_state.results.size());
-            g_state.selected    = COUNT == 0 ? 0 : std::clamp(g_state.selected, 0, COUNT - 1);
+            const int ROWS   = std::max(1, sc<int>(Tuning::number("navigator:rows")));
+            const int COUNT  = sc<int>(g_state.results.size());
+            g_state.selected = COUNT == 0 ? 0 : std::clamp(g_state.selected, 0, COUNT - 1);
             if (g_state.selected < g_state.listOffset)
                 g_state.listOffset = g_state.selected;
             if (g_state.selected >= g_state.listOffset + ROWS)
@@ -292,7 +293,7 @@ namespace SpatialOverview::Navigator {
         stopRepeat();
         const auto REVISION  = g_state.revision;
         g_state              = SState{};
-        g_sessionWorkspace  = workspace;
+        g_sessionWorkspace   = workspace;
         g_state.open         = true;
         g_state.returnWindow = overviewWindow(focused);
         g_state.openedAt     = Time::steadyNow();
@@ -471,19 +472,19 @@ namespace SpatialOverview::Navigator {
                 continue;
             }
 
-            const auto& FIELDS = fieldsFor(WINDOW);
-            bool        matched = true;
-            int         total   = 0;
+            const auto&         FIELDS  = fieldsFor(WINDOW);
+            bool                matched = true;
+            int                 total   = 0;
             std::vector<size_t> scratch;
             for (const auto& token : TOKENS) {
                 std::vector<size_t> titlePositions;
                 std::vector<size_t> classPositions;
-                const int TITLE    = scoreToken(FIELDS.foldedTitle, token, titlePositions);
-                const int CLASS    = scoreToken(FIELDS.foldedClass, token, classPositions);
-                const int CATEGORY = scoreToken(FIELDS.foldedCategory, token, scratch);
-                const int CLASSW   = CLASS < 0 ? -1 : CLASS * 85 / 100;
-                const int CATW     = CATEGORY < 0 ? -1 : CATEGORY * 55 / 100;
-                const int BEST     = std::max({TITLE, CLASSW, CATW});
+                const int           TITLE    = scoreToken(FIELDS.foldedTitle, token, titlePositions);
+                const int           CLASS    = scoreToken(FIELDS.foldedClass, token, classPositions);
+                const int           CATEGORY = scoreToken(FIELDS.foldedCategory, token, scratch);
+                const int           CLASSW   = CLASS < 0 ? -1 : CLASS * 85 / 100;
+                const int           CATW     = CATEGORY < 0 ? -1 : CATEGORY * 55 / 100;
+                const int           BEST     = std::max({TITLE, CLASSW, CATW});
                 if (BEST < 0) {
                     matched = false;
                     break;
@@ -612,7 +613,7 @@ namespace SpatialOverview::Navigator {
     void stopRepeat(uint32_t keycode) {
         if (keycode && g_repeatKey.keycode != keycode)
             return;
-        g_repeatKey = SRepeatKey{};
+        g_repeatKey     = SRepeatKey{};
         g_repeatHandler = nullptr;
         if (g_repeatTimer)
             wl_event_source_timer_update(g_repeatTimer, 0);
@@ -629,7 +630,7 @@ namespace SpatialOverview::Navigator {
     // ---- live tuner -------------------------------------------------------------
 
     namespace {
-        int g_lastTunerParam = 0; // the tuner reopens where it was left
+        int  g_lastTunerParam = 0; // the tuner reopens where it was left
 
         void ensureTunerVisible() {
             const int COUNT       = sc<int>(g_state.tunerResults.size());
@@ -645,11 +646,9 @@ namespace SpatialOverview::Navigator {
         // or key; names count most, so "scale" finds Scale before
         // distortion:edge_scale.
         void refreshTuner(int keepParam, bool bestHit) {
-            const auto& PARAMS = Tuning::params();
-            const auto  TOKENS = queryTokens(g_state.tunerQuery);
-            const auto  contains = [](const std::vector<gunichar>& hay, const std::vector<gunichar>& needle) {
-                return !std::ranges::search(hay, needle).empty();
-            };
+            const auto& PARAMS   = Tuning::params();
+            const auto  TOKENS   = queryTokens(g_state.tunerQuery);
+            const auto  contains = [](const std::vector<gunichar>& hay, const std::vector<gunichar>& needle) { return !std::ranges::search(hay, needle).empty(); };
             std::vector<std::pair<int, int>> scored; // score, index
             for (int i = 0; i < sc<int>(PARAMS.size()); ++i) {
                 const auto LABEL   = fold(PARAMS[i].label);

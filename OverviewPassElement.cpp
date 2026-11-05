@@ -39,7 +39,7 @@ static CRegion roundedRectRegion(const CBox& box, int rounding, float roundingPo
     CRegion    region;
     const auto power = std::max(roundingPower, 0.1F);
 
-    auto insetForRow = [radius, h, power](int row) {
+    auto       insetForRow = [radius, h, power](int row) {
         const double rowCenter = row + 0.5;
         double       dy        = 0.0;
 
@@ -56,8 +56,8 @@ static CRegion roundedRectRegion(const CBox& box, int rounding, float roundingPo
         return std::clamp(sc<int>(std::ceil(radius - inner)), 0, radius);
     };
 
-    int runStart = 0;
-    int runInset = insetForRow(0);
+    int  runStart = 0;
+    int  runInset = insetForRow(0);
 
     auto addRun = [&](int from, int to, int inset) {
         if (to <= from)
@@ -124,7 +124,7 @@ COverviewShadowPassElement::COverviewShadowPassElement(const SData& data_) : dat
 }
 
 std::vector<UP<IPassElement>> COverviewShadowPassElement::draw(Render::CRenderContext& ctx) {
-    const auto MONITOR = data.monitor.lock();
+    const auto MONITOR         = data.monitor.lock();
     const bool HASVISIBLECOLOR = std::ranges::any_of(data.color.m_colors, [](const CHyprColor& color) { return color.a > 0.F; });
     if (!MONITOR || data.fullBox.width < 1 || data.fullBox.height < 1 || data.range <= 0 || !HASVISIBLECOLOR || data.alpha <= 0.F)
         return {};
@@ -136,11 +136,11 @@ std::vector<UP<IPassElement>> COverviewShadowPassElement::draw(Render::CRenderCo
     if (shadowDamage.empty())
         return {};
 
-    const auto SAVEDDAMAGE       = ctx.m_data.damage;
+    const auto SAVEDDAMAGE        = ctx.m_data.damage;
     const auto SAVEDCURRENTWINDOW = ctx.m_data.currentWindow;
-    ctx.m_data.damage = shadowDamage;
+    ctx.m_data.damage             = shadowDamage;
     ctx.m_data.currentWindow.reset();
-    auto restoreRenderData = Hyprutils::Utils::CScopeGuard([&ctx, SAVEDDAMAGE, SAVEDCURRENTWINDOW] {
+    auto               restoreRenderData = Hyprutils::Utils::CScopeGuard([&ctx, SAVEDDAMAGE, SAVEDCURRENTWINDOW] {
         ctx.m_data.damage        = SAVEDDAMAGE;
         ctx.m_data.currentWindow = SAVEDCURRENTWINDOW;
     });
@@ -158,7 +158,8 @@ std::vector<UP<IPassElement>> COverviewShadowPassElement::draw(Render::CRenderCo
         ScrollOverview::Config::setValue("decoration:shadow:render_power", *previousRenderPower);
     });
 
-    g_pHyprRenderer->drawShadow(ctx, data.fullBox, data.rounding, data.roundingPower, data.range, data.color, std::clamp(data.alpha, 0.F, 1.F), Render::SWindowRenderPresentation{});
+    g_pHyprRenderer->drawShadow(ctx, data.fullBox, data.rounding, data.roundingPower, data.range, data.color, std::clamp(data.alpha, 0.F, 1.F),
+                                Render::SWindowRenderPresentation{});
 
     return {};
 }
