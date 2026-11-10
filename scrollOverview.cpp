@@ -1029,8 +1029,27 @@ static bool navigatorPassesThrough(uint32_t keysym, Input::ModifierMask mods) {
     const auto CHORD = mods & (HL_MODIFIER_CTRL | HL_MODIFIER_ALT | HL_MODIFIER_META);
     if (!sc<bool>(CHORD) || !Keybinds::mgr())
         return false;
-    const auto BIND = Keybinds::mgr()->registry().findShortcutConflict(keysym, mods & ~(HL_MODIFIER_CAPS | HL_MODIFIER_MOD2));
-    return BIND && (BIND->metadata().submap == Keybinds::mgr()->currentSubmap() || BIND->hasFlag(Keybinds::BIND_FLAG_SUBMAP_UNIVERSAL));
+    // Shift turns the keysym into its upper case (Shift+O reports O), while
+    // a bind is stored under the unshifted symbol; look up both spellings.
+    const auto CLEAN = mods & ~(HL_MODIFIER_CAPS | HL_MODIFIER_MOD2);
+    const auto LOWER = xkb_keysym_to_lower(keysym);
+    for (const auto SYM : {keysym, LOWER}) {
+        const auto BIND = Keybinds::mgr()->registry().findShortcutConflict(SYM, CLEAN);
+        if (BIND && (BIND->metadata().submap == Keybinds::mgr()->currentSubmap() || BIND->hasFlag(Keybinds::BIND_FLAG_SUBMAP_UNIVERSAL)))
+            return true;
+    }
+    // A multi-key chord (Alt+Shift+Multi_key+O) is invisible to the single
+    // shortcut lookup above. Match its non-modifier keys by keysym and its
+    // modifiers by mask; Hyprland itself decides whether every key is held.
+    for (const auto& BIND : Keybinds::mgr()->registry().binds()) {
+        if (!BIND || !BIND->enabled() || BIND->chordSize() < 2 || (BIND->modifierMask() & ~CLEAN) || BIND->hasFlag(Keybinds::BIND_FLAG_RELEASE))
+            continue;
+        if (BIND->metadata().submap != Keybinds::mgr()->currentSubmap() && !BIND->hasFlag(Keybinds::BIND_FLAG_SUBMAP_UNIVERSAL))
+            continue;
+        if (std::ranges::any_of(BIND->keys(), [&](const auto& key) { return key.keysym() && xkb_keysym_to_lower(*key.keysym()) == LOWER; }))
+            return true;
+    }
+    return false;
 }
 
 static bool isModifierKeysym(uint32_t keysym) {
