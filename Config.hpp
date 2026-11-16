@@ -112,6 +112,7 @@ namespace ScrollOverview::Config {
     bool                                        getCanvasWorkspaceBound();
     bool                                        getCanvasPersistent();
     bool                                        getCanvasLinkedScreens();
+    std::string                                 getCanvasSelectMod();
     bool                                        getCanvasPlaces();
     float                                       getCanvasInitialZoom();
     float                                       getCanvasMinZoom();

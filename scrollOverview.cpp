@@ -1,3 +1,4 @@
+#include <strings.h>
 #include "scrollOverview.hpp"
 #include <algorithm>
 #include <any>
@@ -1008,6 +1009,53 @@ static bool sessionLocked() {
 
 static bool keyStillHeld(uint32_t keycode) {
     return g_pInputManager && std::ranges::any_of(g_pInputManager->m_keyboards, [keycode](const auto& keyboard) { return keyboard && keyboard->getPressed(keycode); });
+}
+
+// The arrow a key press means, as the direction name and unit vector the canvas uses.
+static std::optional<std::pair<std::string, Vector2D>> arrowDirection(uint32_t key) {
+    switch (key) {
+        case XKB_KEY_Left:
+        case XKB_KEY_KP_Left: return std::pair<std::string, Vector2D>{"left", {-1, 0}};
+        case XKB_KEY_Right:
+        case XKB_KEY_KP_Right: return std::pair<std::string, Vector2D>{"right", {1, 0}};
+        case XKB_KEY_Up:
+        case XKB_KEY_KP_Up: return std::pair<std::string, Vector2D>{"up", {0, -1}};
+        case XKB_KEY_Down:
+        case XKB_KEY_KP_Down: return std::pair<std::string, Vector2D>{"down", {0, 1}};
+        default: return std::nullopt;
+    }
+}
+
+// The modifiers named by canvas:select_mod ("SUPER", "ALT + CAPS", ...), as a mask.
+// The shell sets it from its main mod, so the plugin never assumes a key.
+static Input::ModifierMask selectModMask() {
+    static const std::vector<std::pair<std::string_view, Input::ModifierMask>> NAMES = {
+        {"SHIFT", HL_MODIFIER_SHIFT}, {"CAPS", HL_MODIFIER_CAPS},  {"CTRL", HL_MODIFIER_CTRL}, {"CONTROL", HL_MODIFIER_CTRL}, {"ALT", HL_MODIFIER_ALT},
+        {"MOD1", HL_MODIFIER_ALT},    {"SUPER", HL_MODIFIER_META}, {"META", HL_MODIFIER_META}, {"WIN", HL_MODIFIER_META},     {"MOD4", HL_MODIFIER_META},
+    };
+    Input::ModifierMask mask{HL_MODIFIER_NONE};
+    std::string         word;
+    for (const char c : ScrollOverview::Config::getCanvasSelectMod() + "+") {
+        if (c == '+' || c == ' ' || c == '_' || c == '&') {
+            const auto NAME = std::ranges::find_if(NAMES, [&](const auto& n) { return strcasecmp(n.first.data(), word.c_str()) == 0; });
+            if (!word.empty() && NAME != NAMES.end())
+                mask |= NAME->second;
+            word.clear();
+        } else
+            word += c;
+    }
+    return mask;
+}
+
+// The configured modifiers held with an arrow and nothing else: the plugin owns
+// that chord (it selects) instead of leaving it to the compositor's focus binds.
+static bool navigatorSelectChord(uint32_t keysym) {
+    const auto WANT = selectModMask();
+    if (!arrowDirection(keysym) || WANT == Input::ModifierMask{HL_MODIFIER_NONE})
+        return false;
+    // Lock keys count only when the chord names them (CAPS): Caps Lock being on must not break SUPER + arrow.
+    const auto IGNORED = HL_MODIFIER_MOD2 | ((WANT & HL_MODIFIER_CAPS) ? Input::ModifierMask{HL_MODIFIER_NONE} : Input::ModifierMask{HL_MODIFIER_CAPS});
+    return (g_pInputManager->getModsFromAllKBs() & ~IGNORED) == (WANT & ~IGNORED);
 }
 
 // Keys the palette has no use for still stay away from the window it has
@@ -2631,7 +2679,29 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
         const auto MODS = g_pInputManager->getModsFromAllKBs() & ~(HL_MODIFIER_CAPS | HL_MODIFIER_MOD2);
 
         // Let compositor chords reach normal workspace/group bindings before HUD actions can consume them.
-        if (workspaceBoundCanvas && ((MODS & HL_MODIFIER_META) || navigatorPassesThrough(KEYSYM, MODS)))
+        // At 100% the plugin owns Super+arrow: it selects the nearest window, repeats while
+        // held, and the compositor never sees the key, so no bind can also act on it.
+        if (workspaceBoundCanvas && event.state == WL_KEYBOARD_KEY_STATE_PRESSED && !(isCanvasNavigationActive() && SpatialOverview::Navigator::isOpen()) &&
+            navigatorSelectChord(KEYSYM)) {
+            const auto selectToward = [](uint32_t keysym) {
+                const auto DIRECTION = arrowDirection(keysym);
+                const auto canvas    = canvasNavigationOverview();
+                return DIRECTION && canvas && canvas->moveSelection(DIRECTION->first);
+            };
+            selectToward(KEYSYM);
+            SpatialOverview::Navigator::markConsumed(event.keycode);
+            const auto KEYBOARD = g_pSeatManager->m_keyboard.lock();
+            SpatialOverview::Navigator::startRepeat({.keycode = event.keycode, .keysym = KEYSYM, .mods = MODS, .text = {}}, KEYBOARD ? KEYBOARD->m_repeatDelay : 600,
+                                                    KEYBOARD ? KEYBOARD->m_repeatRate : 25, [selectToward](const SpatialOverview::Navigator::SRepeatKey& key) {
+                                                        if (!keyStillHeld(key.keycode) || sessionLocked() || !selectToward(key.keysym))
+                                                            SpatialOverview::Navigator::stopRepeat();
+                                                    });
+            info.cancelled = true;
+            return;
+        }
+
+        const bool SELECTCHORD = isCanvasNavigationActive() && SpatialOverview::Navigator::isOpen() && navigatorSelectChord(KEYSYM);
+        if (workspaceBoundCanvas && !SELECTCHORD && ((MODS & HL_MODIFIER_META) || navigatorPassesThrough(KEYSYM, MODS)))
             return;
 
         if (isCanvasDesktop() && handleNavigatorKey(event, KEYSYM, MODS)) {
@@ -3828,6 +3898,11 @@ void CScrollOverview::toggleCanvasNavigation(bool showNavigator) {
         }
     } else if (SpatialOverview::Experiments::on(ECanvasExperiment::Landing) && hasLandingDestination) {
         commitLanding();
+    } else if (const auto TARGET = SpatialOverview::Navigator::isOpen() ? navigatorLandingTarget() : PHLWINDOW{}; TARGET) {
+        // Closing from the navigator lands on the selection, even when the
+        // opening glide is still under way, instead of stopping wherever it got to.
+        landOnWindow(TARGET);
+        return;
     } else {
         canvasNavigationActive = false;
         canvasPinching         = false;
@@ -7218,6 +7293,33 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
 
         if (best)
             bestCandidate = best->window;
+
+        // Nothing passed the strict edge rules (a tall window has no window that
+        // reaches further down by both edges, say): fall back to the window whose
+        // middle lies furthest that way within 45°, so an arrow never does nothing
+        // while a window sits in that direction.
+        if (!bestCandidate && CURRENT) {
+            const auto CENTRE                         = [&](const SAlong& a) { return std::pair{(a.nearEdge + a.farEdge) / 2.0, (a.acrossMin + a.acrossMax) / 2.0}; };
+            const auto [FROMALONG, FROMACROSS]        = CENTRE(FROM);
+            double                          bestScore = std::numeric_limits<double>::max();
+            std::unordered_set<const void*> seen;
+            for (const auto& windowRef : Desktop::windowState()->windows()) {
+                const auto WINDOW = getOverviewWindowToShow(windowRef);
+                if (!shouldShowOverviewWindow(WINDOW) || !canvasWindowInWorkspace(WINDOW) || windowPinned(WINDOW) || WINDOW == CURRENT || !seen.emplace(WINDOW.get()).second)
+                    continue;
+                if (canvasNavigationActive && !SpatialOverview::Navigator::isMatch(WINDOW))
+                    continue;
+                const auto [ALONG, ACROSS] = CENTRE(along(WINDOW->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT)));
+                const double FORWARDBY = ALONG - FROMALONG, SIDEWAYS = ACROSS - FROMACROSS;
+                if (FORWARDBY <= 0 || std::abs(SIDEWAYS) > FORWARDBY)
+                    continue;
+                const double SCORE = 13.0 * FORWARDBY * FORWARDBY + SIDEWAYS * SIDEWAYS;
+                if (SCORE < bestScore) {
+                    bestScore     = SCORE;
+                    bestCandidate = WINDOW;
+                }
+            }
+        }
         if (!bestCandidate)
             return false;
 
@@ -10571,6 +10673,20 @@ void CScrollOverview::finishSwitcher(bool cancel) {
     Navigator::noteFocus(WINDOW, true);
 }
 
+// Where leaving the navigator lands: the window the user selected, or, when they
+// searched or stepped nowhere, the focused window; if focus is on nothing the
+// canvas can show (right after launch), the window the reticle is on.
+PHLWINDOW CScrollOverview::navigatorLandingTarget() {
+    namespace Navigator = SpatialOverview::Navigator;
+    const auto usable   = [this](const PHLWINDOW& window) { return window && shouldShowOverviewWindow(window) && canvasWindowInWorkspace(window) && !windowPinned(window); };
+    const auto SELECTED = Navigator::selectedWindow();
+    if (usable(SELECTED) && (Navigator::queryActive() || Navigator::state().listRevealed))
+        return SELECTED;
+    if (const auto FOCUSED = getOverviewWindowToShow(Desktop::focusState()->window()); usable(FOCUSED))
+        return FOCUSED;
+    return usable(SELECTED) ? SELECTED : nullptr;
+}
+
 void CScrollOverview::landOnWindow(PHLWINDOW window) {
     syncAnimationConfig();
     const auto MONITOR = pMonitor.lock();
@@ -10799,7 +10915,7 @@ bool CScrollOverview::handleNavigatorKey(const IKeyboard::SKeyEvent& event, uint
     Navigator::stopRepeat();
     // Super chords stay with Hyprland, so the canvas toggle, window
     // management and launcher bindings keep working while searching.
-    if (mods & HL_MODIFIER_META)
+    if ((mods & HL_MODIFIER_META) && !navigatorSelectChord(keysym))
         return false;
 
     const bool TEXTINPUT = !(mods & (HL_MODIFIER_CTRL | HL_MODIFIER_ALT));
@@ -10932,19 +11048,6 @@ bool CScrollOverview::navigatorKeyAction(uint32_t keysym, Input::ModifierMask mo
         damage();
         return true;
     };
-    const auto direction = [](uint32_t key) -> std::optional<std::pair<std::string, Vector2D>> {
-        switch (key) {
-            case XKB_KEY_Left:
-            case XKB_KEY_KP_Left: return std::pair<std::string, Vector2D>{"left", {-1, 0}};
-            case XKB_KEY_Right:
-            case XKB_KEY_KP_Right: return std::pair<std::string, Vector2D>{"right", {1, 0}};
-            case XKB_KEY_Up:
-            case XKB_KEY_KP_Up: return std::pair<std::string, Vector2D>{"up", {0, -1}};
-            case XKB_KEY_Down:
-            case XKB_KEY_KP_Down: return std::pair<std::string, Vector2D>{"down", {0, 1}};
-            default: return std::nullopt;
-        }
-    };
 
     if (keysym == XKB_KEY_Escape && STATE.switcher && !CTRL) {
         finishSwitcher(true);
@@ -10971,7 +11074,7 @@ bool CScrollOverview::navigatorKeyAction(uint32_t keysym, Input::ModifierMask mo
     if (ALT && !CTRL)
         return handleExperimentKey(keysym, mods & ~HL_MODIFIER_ALT);
 
-    if (const auto DIRECTION = direction(keysym)) {
+    if (const auto DIRECTION = arrowDirection(keysym)) {
         const auto FOCUSED = getOverviewWindowToShow(Desktop::focusState()->window());
         if (SHIFT && !CTRL) {
             nudgeWindow(FOCUSED, DIRECTION->second, !repeat);
@@ -10983,7 +11086,8 @@ bool CScrollOverview::navigatorKeyAction(uint32_t keysym, Input::ModifierMask mo
         }
         if (CTRL || SHIFT)
             return false;
-        if (Navigator::listVisible() && (keysym == XKB_KEY_Up || keysym == XKB_KEY_KP_Up || keysym == XKB_KEY_Down || keysym == XKB_KEY_KP_Down))
+        // Up and Down walk an open list of results, with or without Super.
+        if (Navigator::listVisible() && DIRECTION->second.y != 0)
             return selectionMoved(DIRECTION->second.y < 0 ? -1 : 1);
         if (moveSelection(DIRECTION->first))
             Navigator::selectWindow(Desktop::focusState()->window());
@@ -11023,9 +11127,7 @@ bool CScrollOverview::navigatorKeyAction(uint32_t keysym, Input::ModifierMask mo
             }
             if (Navigator::queryActive() && STATE.results.empty())
                 return true;
-            auto WINDOW = Navigator::selectedWindow();
-            if (!WINDOW || (!Navigator::queryActive() && !STATE.listRevealed))
-                WINDOW = getOverviewWindowToShow(Desktop::focusState()->window());
+            auto WINDOW = navigatorLandingTarget();
             if (SHIFT)
                 summonWindow(WINDOW);
             else

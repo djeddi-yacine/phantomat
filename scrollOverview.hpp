@@ -183,6 +183,7 @@ class CScrollOverview : public IOverview {
     void                revertNavigation();
     bool                handleNavigatorKey(const IKeyboard::SKeyEvent& event, uint32_t keysym, Input::ModifierMask mods);
     void                followNavigatorSelection();
+    PHLWINDOW           navigatorLandingTarget();
     bool                navigatorOwnsPointer() const;
     bool                showsNavigatorHud() const;
     float               workspaceHudOpacity() const;

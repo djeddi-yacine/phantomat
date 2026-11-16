@@ -439,6 +439,10 @@ namespace ScrollOverview::Config {
         HyprlandAPI::addConfigValueV2(
             SCROLLOVERVIEW_HANDLE,
             makeShared<CBoolValue>("plugin:spatialoverview:canvas:linked_screens", "screens show adjacent parts of the canvas and move together, like one wide desk", true));
+        HyprlandAPI::addConfigValueV2(SCROLLOVERVIEW_HANDLE,
+                                      makeShared<CStringValue>("plugin:spatialoverview:canvas:select_mod",
+                                                               "modifiers that, held with an arrow, select the nearest window (the compositor main mod, e.g. SUPER or ALT + CAPS)",
+                                                               Hyprlang::STRING{"SUPER"}));
         HyprlandAPI::addConfigValueV2(
             SCROLLOVERVIEW_HANDLE,
             makeShared<CBoolValue>("plugin:spatialoverview:canvas:places", "workspace keys go to places on the canvas (experimental); off, they do nothing on the canvas", false));
@@ -763,6 +767,10 @@ namespace ScrollOverview::Config {
 
     bool getCanvasWorkspaceBound() {
         return getValue<bool>("plugin:spatialoverview:canvas:workspace_bound");
+    }
+
+    std::string getCanvasSelectMod() {
+        return getValue<std::string>("plugin:spatialoverview:canvas:select_mod");
     }
 
     bool getCanvasPlaces() {

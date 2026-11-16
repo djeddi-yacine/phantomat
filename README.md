@@ -120,7 +120,7 @@ them too.
 | --- | --- |
 | `SUPER + CTRL + G` | Zoom out to the canvas (and back). |
 | `ALT + TAB`, `ALT + SHIFT + TAB` | Recent windows. A tap flips to the previous one; hold `ALT` for the list, release to go. |
-| `SUPER` + arrows | Focus the nearest window in that direction; the camera follows. |
+| `SUPER` + arrows | Focus the nearest window in that direction; the camera follows. The plugin takes the keys itself, so no compositor bind sees them. Plain arrows go to the app. |
 | `SUPER + SHIFT` + arrows | Nudge the focused window one grid step; hold to keep moving. |
 | `SUPER + T`, `SUPER + ALT + F` | Make the focused window fill its screen, with the usual gaps; again puts it back. |
 | `SUPER + F`, or an app going fullscreen | Fullscreen on the screen the window is on; the other screens keep the canvas. `SUPER + CTRL + G` takes the screen back, going back to the window makes it fullscreen again. |
@@ -141,7 +141,7 @@ them too.
 | `Enter` | Go to the selected window at full size. |
 | `SHIFT + Enter` | Bring the selected window to where you are, then go there. |
 | `Esc` | Clear the search, then go back to where you started. |
-| `←` `→` `↑` `↓` | Select the nearest window in that direction. |
+| `←` `→` `↑` `↓`, or `SUPER` + arrows | Select the nearest window in that direction (`↑` `↓` walk the results while a list is open). |
 | `SHIFT` + arrows | Nudge the selected window. |
 | `CTRL` + arrows | Pan. |
 | `CTRL + =`, `CTRL + -` | Zoom in, out. |

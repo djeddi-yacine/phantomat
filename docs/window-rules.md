@@ -33,8 +33,8 @@ them (`tests/*-nested.py`; most take `NESTED_SCALE=1.25` for scaled screens).
 - **Landing on a window brings it in front.** *keys*
 - **Focus follows the pointer between screens**, also onto a screen given to a
   fullscreen window. *fullscreen-cases*
-- **Arrows go where they point.** SUPER + arrows at 100% and the arrows in the
-  zoomed-out view pick the nearest window that way, from where the windows are
+- **Arrows go where they point.** SUPER + arrows, at 100% and in the
+  zoomed-out view, pick the nearest window that way, from where the windows are
   now (after a drag or a tidy-up too), across both screens. It has to reach
   further that way than the current one with both edges, and lie that way
   rather than off to the side (some of it within 45°). A window in line with
