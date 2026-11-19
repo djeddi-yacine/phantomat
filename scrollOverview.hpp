@@ -25,6 +25,12 @@
 class CMonitor;
 struct wl_event_source;
 
+// The focused window is a workspace canvas's fullscreen window (the arrows are
+// its to answer), and what the arrows do then. scrollOverview.cpp.
+bool canvasFullscreenOwnsArrows();
+
+void canvasFullscreenArrow(const std::string& direction);
+
 namespace SpatialOverview {
     bool workspaceCanvasEnabled(const PHLWORKSPACE& workspace);
     void setWorkspaceCanvasEnabled(const PHLWORKSPACE& workspace, bool enabled);
@@ -137,6 +143,7 @@ class CScrollOverview : public IOverview {
     // Go on to where `from` (a leader going away) was heading.
     void inheritLinkedCamera(const CScrollOverview* from);
     void syncCanvasWindowScreens();
+    void settleCanvasGroups();
     void canvasClaimX11Window(const PHLWINDOW& window);
     // A client asked to be moved (or resized from an edge) by its own
     // title bar; run the canvas's drag with the button the app was pressed with.
@@ -184,6 +191,7 @@ class CScrollOverview : public IOverview {
     bool                handleNavigatorKey(const IKeyboard::SKeyEvent& event, uint32_t keysym, Input::ModifierMask mods);
     void                followNavigatorSelection();
     PHLWINDOW           navigatorLandingTarget();
+    PHLWINDOW           canvasFocusOrLatest();
     bool                navigatorOwnsPointer() const;
     bool                showsNavigatorHud() const;
     float               workspaceHudOpacity() const;

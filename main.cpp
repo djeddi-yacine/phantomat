@@ -916,6 +916,13 @@ static SDispatchResult            onOverviewDispatcher(std::string arg) {
 }
 
 static SDispatchResult onNavigateDispatcher(std::string arg) {
+    // A fullscreen window on a workspace canvas has the arrows to itself.
+    if (canvasFullscreenOwnsArrows()) {
+        if (arg == "left" || arg == "right" || arg == "up" || arg == "down")
+            canvasFullscreenArrow(arg);
+        return {};
+    }
+
     // Window ownership is only a surface-storage detail in the shared canvas.
     // Route arrows through the last camera the user actually interacted with,
     // and keep that output locked for the duration of the Super key hold.

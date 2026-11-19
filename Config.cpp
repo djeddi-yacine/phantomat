@@ -253,6 +253,13 @@ namespace {
         return 1;
     }
 
+    int workspaceCanvasFullscreenLua(lua_State* L) {
+        if (lua_gettop(L) != 0)
+            return luaL_error(L, "workspace_canvas_fullscreen: expected no arguments");
+        lua_pushboolean(L, canvasFullscreenOwnsArrows());
+        return 1;
+    }
+
     int outputColorsLua(lua_State* L) {
         if (lua_gettop(L) != 1 || !lua_istable(L, 1))
             return luaL_error(L, "output_colors: expected one table keyed by output name");
@@ -354,6 +361,8 @@ namespace ScrollOverview::Config {
         HyprlandAPI::addLuaFunction(SCROLLOVERVIEW_HANDLE, "spatialoverview", "output_colors", ::outputColorsLua);
         if (!HyprlandAPI::addLuaFunction(SCROLLOVERVIEW_HANDLE, "spatialoverview", "workspace_canvas_active", ::workspaceCanvasActiveLua))
             throw std::runtime_error("[spatialoverview] Failed to register workspace_canvas_active");
+        if (!HyprlandAPI::addLuaFunction(SCROLLOVERVIEW_HANDLE, "spatialoverview", "workspace_canvas_fullscreen", ::workspaceCanvasFullscreenLua))
+            throw std::runtime_error("[spatialoverview] Failed to register workspace_canvas_fullscreen");
         // Lets a config apply newer settings only when the loaded build knows
         // them: 2 = navigator, switcher, layout memory; 3 = live tuner, HUD and
         // lens settings, parallax.

@@ -575,8 +575,15 @@ namespace SpatialOverview::Navigator {
 
     void noteFocus(const PHLWINDOW& window, bool force) {
         const auto TARGET = overviewWindow(window);
-        if (!TARGET || (g_state.open && !force))
+        if (!TARGET)
             return;
+        if (g_state.open && !force) {
+            // Until the user picks something, the highlight follows focus: a
+            // window opened while the HUD is up becomes the selection.
+            if (!queryActive() && !g_state.listRevealed)
+                selectWindow(TARGET);
+            return;
+        }
         g_focusStamps[TARGET->metadata().stableID()] = ++g_focusCounter;
     }
 

@@ -261,8 +261,32 @@ struct SCanvasFullscreen {
     std::optional<CBox>     request; // what an X11 app last asked for meanwhile (X11 coordinates)
     std::optional<CBox>     before;  // where it was before, as the canvas last drew it
     std::optional<Vector2D> savedCamera;
+    bool                    follow = false; // came here by a hop: the camera goes to the window when it returns
 };
 static std::vector<SCanvasFullscreen> g_canvasFullscreen;
+
+// Hyprland announces no group join or leave, and hides the members a group does
+// not show. A window that joins a group and is hidden right away stops being
+// input-able, which makes Hyprland drop the keyboard focus (null): the window
+// the keys were going to is only known from before. Every frame the canvas
+// compares each window's group and keeps the last window the keyboard was on,
+// so the window acted on keeps both the keyboard and its place (see
+// CScrollOverview::settleCanvasGroups).
+struct SCanvasGroupWatch {
+    std::unordered_map<uint64_t, const void*> groups; // every window's group, as last seen
+    PHLWINDOWREF                              focused;
+    Time::steady_tp                           until; // after a change, keep giving the keyboard back until here
+};
+static SCanvasGroupWatch g_canvasGroupWatch;
+// The window the HUD was opened from joined or left a group while the HUD was
+// open: its saved camera is stale, Escape goes to where it sits now.
+static bool g_canvasReturnWindowRegrouped = false;
+static void resetCanvasGroupWatch() {
+    g_canvasGroupWatch.groups.clear();
+    g_canvasGroupWatch.focused.reset();
+    g_canvasGroupWatch.until = {};
+}
+
 void                                  unconstrainCanvasWindows(const PHLWORKSPACE& workspace = {});
 static bool                           canvasFullscreenWindow(const PHLWINDOW& window) {
     return window && std::ranges::any_of(g_canvasFullscreen, [&window](const auto& entry) { return entry.window.lock() == window; });
@@ -2496,8 +2520,15 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
             }
         }
 
-        if (sharedStateOwner && SpatialOverview::Navigator::isOpen())
+        if (sharedStateOwner && SpatialOverview::Navigator::isOpen()) {
             SpatialOverview::Navigator::rebuildResults(false);
+            // Until the user picks something, the selection is the newest window,
+            // the same one the camera just glided to.
+            const auto OPENED = getOverviewWindowToShow(window);
+            if (!SpatialOverview::Navigator::queryActive() && !SpatialOverview::Navigator::state().listRevealed && shouldShowOverviewWindow(OPENED) &&
+                canvasWindowInWorkspace(OPENED) && SpatialOverview::Navigator::selectWindow(OPENED))
+                closeOnWindow = OPENED;
+        }
 
         rebuildPending = true;
         damage();
@@ -3872,6 +3903,8 @@ void CScrollOverview::toggleCanvasNavigation(bool showNavigator) {
         auto SELECTED = getOverviewWindowToShow(Desktop::focusState()->window());
         if (!shouldShowOverviewWindow(SELECTED) || !canvasWindowInWorkspace(SELECTED))
             SELECTED = getOverviewWindowToShow(closeOnWindow.lock());
+        if (!shouldShowOverviewWindow(SELECTED) || !canvasWindowInWorkspace(SELECTED))
+            SELECTED = canvasFocusOrLatest();
         if (shouldShowOverviewWindow(SELECTED) && canvasWindowInWorkspace(SELECTED) && !windowPinned(SELECTED)) {
             followCanvasWindow(SELECTED, true, true);
             if (SpatialOverview::Navigator::isOpen())
@@ -3898,9 +3931,10 @@ void CScrollOverview::toggleCanvasNavigation(bool showNavigator) {
         }
     } else if (SpatialOverview::Experiments::on(ECanvasExperiment::Landing) && hasLandingDestination) {
         commitLanding();
-    } else if (const auto TARGET = SpatialOverview::Navigator::isOpen() ? navigatorLandingTarget() : PHLWINDOW{}; TARGET) {
-        // Closing from the navigator lands on the selection, even when the
-        // opening glide is still under way, instead of stopping wherever it got to.
+    } else if (const auto TARGET = SpatialOverview::Navigator::isOpen() ? navigatorLandingTarget() : canvasFocusOrLatest(); TARGET) {
+        // Closing lands on the selection (else the focused window, else the one
+        // opened last), even when the opening glide is still under way, instead
+        // of stopping wherever it got to.
         landOnWindow(TARGET);
         return;
     } else {
@@ -4433,8 +4467,17 @@ static void canvasFullscreenComeBack(const SCanvasFullscreen& entry) {
             Desktop::focusState()->fullWindowFocus(WINDOW, Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
         canvas->canvasAdoptFocus(WINDOW);
     });
-    const auto FULLSCREEN = canvas->canvasScreenToWorld(MONITOR->logicalBox());
+    auto       FULLSCREEN = entry.follow ? std::nullopt : canvas->canvasScreenToWorld(MONITOR->logicalBox());
     canvasPlaceAfterFullscreen(entry, canvas, WINDOW, MONITOR);
+    // A window the fullscreen hopped to may lie off the saved view: show it.
+    if (entry.follow) {
+        canvas->followCanvasWindow(WINDOW, true, false);
+        // The window's current box is still the full screen here: centre the
+        // camera on the box it is going back to.
+        if (entry.before)
+            canvas->warpCameraOffset(entry.before->middle() - MONITOR->m_position - MONITOR->m_size * 0.5F);
+        FULLSCREEN = canvas->canvasScreenToWorld(MONITOR->logicalBox());
+    }
     // It shrinks back from the full screen into its place.
     if (FULLSCREEN)
         animateWindowFrom(WINDOW, *FULLSCREEN);
@@ -4644,6 +4687,93 @@ static void canvasFullscreenReturnCheck() {
 // active one: focus and keys there are the fullscreen window's.
 bool canvasSteppedAside(const PHLMONITOR& monitor) {
     return monitor && std::ranges::any_of(g_canvasFullscreen, [&monitor](const auto& entry) { return entry.monitor.lock() == monitor; });
+}
+
+// The focused window is the fullscreen window of a workspace canvas that
+// stepped aside for it. The arrows are then the canvas's to answer (they must
+// not fall through to Hyprland's own focus move, which hops between
+// fullscreen windows and leaves them misplaced).
+bool canvasFullscreenOwnsArrows() {
+    const auto MONITOR = Desktop::focusState()->monitor();
+    const auto FOCUSED = getOverviewWindowToShow(Desktop::focusState()->window());
+    if (!MONITOR || !FOCUSED || !FOCUSED->m_workspace || !SpatialOverview::workspaceCanvasEnabled(FOCUSED->m_workspace))
+        return false;
+    // Right after a switch inside a group the canvas is between steps (the
+    // entry is dropped and made again), so the window's own state counts too.
+    if (Fullscreen::controller()->isFullscreen(FOCUSED))
+        return true;
+    // The entry names the window that went fullscreen; after a switch inside
+    // its group the focused one is another member of the same group.
+    return std::ranges::any_of(g_canvasFullscreen, [&](const auto& entry) {
+        const auto WINDOW = entry.window.lock();
+        if (!WINDOW || entry.monitor.lock() != MONITOR)
+            return false;
+        const auto GROUP = WINDOW->grouping().group();
+        return WINDOW == FOCUSED || (GROUP && GROUP == FOCUSED->grouping().group());
+    });
+}
+
+// The arrows over a fullscreen window: the nearest window on the canvas in that
+// direction takes the fullscreen over, directly. The canvas stays stepped aside
+// (one entry changes hands); the window that leaves goes back to its place. No
+// window that way: nothing happens. Groups are walked with Super+Ctrl+arrows.
+void canvasFullscreenArrow(const std::string& direction) {
+    const bool HORIZONTAL = direction == "left" || direction == "right";
+    if (!HORIZONTAL && direction != "up" && direction != "down")
+        return;
+    const double SIGN = direction == "left" || direction == "up" ? -1.0 : 1.0;
+
+    const auto   FOCUSED = getOverviewWindowToShow(Desktop::focusState()->window());
+    const auto   ENTRY   = std::ranges::find_if(g_canvasFullscreen, [&](const auto& entry) { return FOCUSED && entry.window.lock() == FOCUSED; });
+    if (ENTRY == g_canvasFullscreen.end() || !validMapped(FOCUSED) || !FOCUSED->layoutTarget())
+        return;
+    const auto MONITOR = ENTRY->monitor.lock();
+    if (!MONITOR)
+        return;
+
+    const auto FROMBOX = ENTRY->before ? *ENTRY->before : FOCUSED->layoutTarget()->position();
+    const auto FROM    = FROMBOX.middle();
+
+    PHLWINDOW  best;
+    double     bestScore = INFINITY;
+    for (const auto& window : Desktop::windowState()->windows()) {
+        if (!window || window == FOCUSED || !Desktop::View::validMapped(window) || window->m_workspace != FOCUSED->m_workspace || !window->layoutTarget() ||
+            getOverviewWindowToShow(window) != window || !shouldShowOverviewWindow(window))
+            continue;
+        const auto MIDDLE = window->layoutTarget()->position().middle();
+        const auto ALONG  = (HORIZONTAL ? MIDDLE.x - FROM.x : MIDDLE.y - FROM.y) * SIGN;
+        const auto ACROSS = std::abs(HORIZONTAL ? MIDDLE.y - FROM.y : MIDDLE.x - FROM.x);
+        if (ALONG <= 0.0)
+            continue;
+        if (const auto SCORE = ALONG + 2.0 * ACROSS; SCORE < bestScore) {
+            bestScore = SCORE;
+            best      = window;
+        }
+    }
+    if (!best)
+        return;
+
+    const auto MODES = Fullscreen::controller()->getFullscreenModes(FOCUSED);
+    auto       entry = *ENTRY;
+    entry.window     = best;
+    entry.request.reset();
+    entry.before = best->layoutTarget()->position();
+    entry.follow = true;
+    auto LEAVING = *ENTRY;
+
+    g_canvasFullscreenApplying = true;
+    *ENTRY                     = entry;
+    Fullscreen::controller()->setFullscreenMode(FOCUSED, Fullscreen::FSMODE_NONE, Fullscreen::FSMODE_NONE);
+    if (const auto TARGET = FOCUSED->layoutTarget(); TARGET && LEAVING.before) {
+        TARGET->rememberFloatingSize(LEAVING.before->size());
+        TARGET->setPositionGlobal(*LEAVING.before);
+    }
+    Fullscreen::controller()->setFullscreenMode(best, MODES.internal, MODES.client);
+    g_canvasFullscreenApplying = false;
+
+    Desktop::focusState()->fullWindowFocus(best, Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
+    best->sendWindowSize(true);
+    FOCUSED->sendWindowSize(true);
 }
 
 // Window and workspace events, from main.cpp.
@@ -5519,10 +5649,18 @@ void CScrollOverview::seedCanvasWindows() {
     if (!isCanvasDesktop())
         return;
 
+    // A canvas that opens sees every group as it is now: nothing to settle.
+    resetCanvasGroupWatch();
+
     const std::vector<PHLWINDOW> WINDOWS{Desktop::windowState()->windows().begin(), Desktop::windowState()->windows().end()};
-    for (const auto& window : WINDOWS)
-        if (canvasWindowInWorkspace(window))
-            manageCanvasWindow(window, true);
+    for (const auto& window : WINDOWS) {
+        if (!canvasWindowInWorkspace(window))
+            continue;
+        // Hyprland can run no frame between opening the canvas and a window
+        // going fullscreen, so the place to return to is recorded here too.
+        if (manageCanvasWindow(window, true))
+            noteCanvasWindowedBox(getOverviewWindowToShow(window));
+    }
 }
 
 void CScrollOverview::forwardCanvasPointerMotion(uint32_t timeMs) {
@@ -5534,8 +5672,12 @@ void CScrollOverview::forwardCanvasPointerMotion(uint32_t timeMs) {
     // change, and the camera slides windows under a resting pointer. Only a
     // pointer that really moved (or a button press) may hover-focus; otherwise
     // each keyboard step would hand focus to whatever slid under the mouse.
+    // A canvas that has not seen the pointer yet (just reopened after a
+    // fullscreen window left) has nothing to compare with: the pointer resting
+    // where it was is not a move.
     const auto POINTER      = g_pInputManager->getMouseCoordsInternal();
-    const bool POINTERMOVED = timeMs != 0 || POINTER.distanceSq(hoverPointerPos) > 0.25;
+    const bool FIRSTLOOK    = hoverPointerPos.x < -1e8;
+    const bool POINTERMOVED = timeMs != 0 || (!FIRSTLOOK && POINTER.distanceSq(hoverPointerPos) > 0.25);
     hoverPointerPos         = POINTER;
 
     CBox       BOX;
@@ -9807,6 +9949,124 @@ void CScrollOverview::followLinkedCamera() {
     linkedAppliedScale  = ZOOM;
 }
 
+// Hyprland announces no group join or leave. Every frame the canvas compares
+// each window's group with the one it was last seen in. A window that joined a
+// group stops owning a canvas box (the group's box is used); one that left is
+// placed again beside the group, like a new client, and raised. A join hides the
+// members the group does not show, and a hidden window stops taking input: that
+// is what makes Hyprland drop the keyboard focus (null). The window the keyboard
+// was last on is remembered, so the window acted on keeps the keyboard however
+// the shown and hidden members shift.
+void CScrollOverview::settleCanvasGroups() {
+    if (closing || !isCanvasDesktop() || !pMonitor)
+        return;
+
+    auto&      watch = g_canvasGroupWatch;
+
+    const auto MONITOR = pMonitor.lock();
+    if (!MONITOR)
+        return;
+
+    // Only a window this screen shows is worth remembering: a lost focus must
+    // not erase the last one.
+    const auto rememberFocus = [&] {
+        const auto FOCUS = getOverviewWindowToShow(Desktop::focusState()->window());
+        if (FOCUS && FOCUS->m_monitor == MONITOR && canvasWindowInWorkspace(FOCUS))
+            watch.focused = FOCUS;
+    };
+
+    std::unordered_map<uint64_t, const void*> groups;
+    for (const auto& windowRef : Desktop::windowState()->windows()) {
+        if (windowRef)
+            groups[windowRef->metadata().stableID()] = windowRef->grouping().group().get();
+    }
+
+    // First frame: only record where things stand, so opening the canvas never
+    // looks like every window at once changed group.
+    if (watch.groups.empty()) {
+        watch.groups = std::move(groups);
+        rememberFocus();
+        return;
+    }
+
+    bool changed = false;
+    for (const auto& windowRef : Desktop::windowState()->windows()) {
+        if (!windowRef)
+            continue;
+        const auto  STABLE = windowRef->metadata().stableID();
+        const void* GROUP  = windowRef->grouping().group().get();
+        const auto  BEFORE = watch.groups.find(STABLE);
+        if (BEFORE == watch.groups.end() || BEFORE->second == GROUP)
+            continue;
+
+        changed = true;
+        if (!canvasWindowInWorkspace(windowRef))
+            continue;
+
+        {
+            const auto SHOWN = getOverviewWindowToShow(windowRef);
+            if (canvasNavigationActive && SpatialOverview::Navigator::state().returnWindow.lock() == windowRef)
+                g_canvasReturnWindowRegrouped = true;
+            // Selection and focus stay on the group: the group joined, or the
+            // one the window just left (found by its old pointer).
+            PHLWINDOW groupWin;
+            if (GROUP && GROUP != BEFORE->second)
+                groupWin = windowRef->grouping().group()->current();
+            else if (BEFORE->second) {
+                for (const auto& other : Desktop::windowState()->windows()) {
+                    if (other && other != windowRef && other->grouping().group().get() == BEFORE->second) {
+                        groupWin = other->grouping().group()->current();
+                        break;
+                    }
+                }
+            }
+            if (!groupWin)
+                groupWin = SHOWN;
+            if (groupWin && (SpatialOverview::Navigator::selectedWindow() == windowRef || Desktop::focusState()->window() == windowRef || !Desktop::focusState()->window())) {
+                if (SpatialOverview::Navigator::isOpen())
+                    SpatialOverview::Navigator::noteFocus(groupWin, true);
+                watch.focused = groupWin;
+                Desktop::focusState()->fullWindowFocus(groupWin, Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
+                canvasAdoptFocus(groupWin);
+            }
+        }
+
+        // The box the window had is stale now: a group draws one member, and a
+        // window that left is placed again below.
+        g_canvasSpatialLayout.erase(STABLE);
+        if (const auto TARGET = windowRef->layoutTarget())
+            g_canvasManagedTargets.erase(TARGET.get());
+
+        const auto WINDOW = getOverviewWindowToShow(windowRef);
+        if (BEFORE->second && !GROUP && WINDOW && WINDOW->m_monitor == MONITOR && manageCanvasWindow(WINDOW, true)) {
+            (void)Config::Actions::alterZOrder("top", WINDOW);
+            noteCanvasLayoutChanged();
+        }
+        rebuildPending = true;
+        damage();
+    }
+
+    watch.groups = std::move(groups);
+    // Hyprland drops the keyboard a frame or more after the group changes, so
+    // the window acted on is handed the keyboard back for a short while, not once.
+    if (changed)
+        watch.until = Time::steadyNow() + std::chrono::milliseconds(600);
+    if (Time::steadyNow() > watch.until)
+        rememberFocus();
+    if (Time::steadyNow() > watch.until)
+        return;
+
+    // The keyboard went to the member the group shows, or to the window that
+    // left, never to nothing.
+    const auto REMEMBERED = getOverviewWindowToShow(watch.focused.lock());
+    if (REMEMBERED && REMEMBERED->m_monitor == MONITOR && canvasWindowInWorkspace(REMEMBERED) && !Desktop::focusState()->window()) {
+        const auto GROUP  = REMEMBERED->grouping().group();
+        const auto TARGET = GROUP && GROUP->current() ? GROUP->current() : REMEMBERED;
+        Desktop::focusState()->fullWindowFocus(TARGET, Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
+        canvasAdoptFocus(TARGET);
+    }
+}
+
 // A canvas window belongs to the workspace of the screen that shows most of
 // it. Hyprland keys much to that: one fullscreen window per workspace (a
 // window on the other screen's workspace would throw it out of fullscreen),
@@ -9848,6 +10108,16 @@ void CScrollOverview::onPreRender() {
 
     followLinkedCamera();
     syncCanvasWindowScreens();
+    // Remember where each window sits now, not only when it is drawn: a window
+    // that goes fullscreen before its first draw would have no place to return to.
+    if (isCanvasDesktop() && !closing) {
+        for (const auto& windowRef : Desktop::windowState()->windows()) {
+            const auto WINDOW = getOverviewWindowToShow(windowRef);
+            if (WINDOW && canvasWindowInWorkspace(WINDOW) && shouldShowOverviewWindow(WINDOW))
+                noteCanvasWindowedBox(WINDOW);
+        }
+    }
+    settleCanvasGroups();
 
     forceLayersAboveFullscreen();
     updateWorkspaceOverflow();
@@ -10515,9 +10785,21 @@ void CScrollOverview::revertNavigation() {
     canvasNavigationActive = false;
     canvasPinching         = false;
     landingDrag            = false;
-    if (hasNavigationReturn) {
+    // Cancelling goes back to where the HUD was opened from. That only means
+    // something when a window was focused then; on an empty canvas the saved
+    // offset is just the spot the first window later got placed at, so the
+    // camera stays with the focused (newest) window instead.
+    const auto RETURNWINDOW = getOverviewWindowToShow(SpatialOverview::Navigator::state().returnWindow.lock());
+    const auto FOCUSED      = canvasFocusOrLatest();
+    const bool REGROUPED    = std::exchange(g_canvasReturnWindowRegrouped, false);
+    if (REGROUPED && shouldShowOverviewWindow(RETURNWINDOW))
+        *viewOffset = canvasCameraOffsetFor(RETURNWINDOW, 1.F, false);
+    else if (hasNavigationReturn && shouldShowOverviewWindow(RETURNWINDOW))
         *viewOffset = navigationReturnOffset;
-    }
+    else if (FOCUSED)
+        *viewOffset = canvasCameraOffsetFor(FOCUSED, 1.F, false);
+    else if (hasNavigationReturn)
+        *viewOffset = navigationReturnOffset;
     *scale              = 1.F;
     *transitionProgress = 0.F;
     leaveNavigatorPointer();
@@ -10541,7 +10823,7 @@ Vector2D CScrollOverview::canvasCameraOffsetFor(const PHLWINDOW& window, float z
     if (!MONITOR || !window)
         return viewOffset->goal();
 
-    const auto BOX    = window->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
+    const auto BOX    = window->geometricBox(Desktop::View::IGeometric::GEOMETRIC_GOAL);
     auto       target = BOX.middle();
     // Navigating centres the selected client exactly on the monitor.
     if (!navigating) {
@@ -10679,12 +10961,26 @@ void CScrollOverview::finishSwitcher(bool cancel) {
 PHLWINDOW CScrollOverview::navigatorLandingTarget() {
     namespace Navigator = SpatialOverview::Navigator;
     const auto usable   = [this](const PHLWINDOW& window) { return window && shouldShowOverviewWindow(window) && canvasWindowInWorkspace(window) && !windowPinned(window); };
-    const auto SELECTED = Navigator::selectedWindow();
-    if (usable(SELECTED) && (Navigator::queryActive() || Navigator::state().listRevealed))
+    // The HUD selection is the single source: it follows focus and new windows
+    // until the user picks, so the camera, the highlight and focus all agree.
+    if (const auto SELECTED = Navigator::selectedWindow(); usable(SELECTED))
         return SELECTED;
+    return canvasFocusOrLatest();
+}
+
+// The window the camera belongs on when nothing was picked: the focused one,
+// else the one opened last (the highest stable id of those the canvas shows).
+PHLWINDOW CScrollOverview::canvasFocusOrLatest() {
+    const auto usable = [this](const PHLWINDOW& window) { return window && shouldShowOverviewWindow(window) && canvasWindowInWorkspace(window) && !windowPinned(window); };
     if (const auto FOCUSED = getOverviewWindowToShow(Desktop::focusState()->window()); usable(FOCUSED))
         return FOCUSED;
-    return usable(SELECTED) ? SELECTED : nullptr;
+    PHLWINDOW latest;
+    for (const auto& windowRef : Desktop::windowState()->windows()) {
+        const auto WINDOW = getOverviewWindowToShow(windowRef);
+        if (usable(WINDOW) && (!latest || WINDOW->metadata().stableID() > latest->metadata().stableID()))
+            latest = WINDOW;
+    }
+    return latest;
 }
 
 void CScrollOverview::landOnWindow(PHLWINDOW window) {
@@ -11650,7 +11946,12 @@ void CScrollOverview::queueSelectionOutline(Render::CRenderContext& ctx, PHLMONI
     // The outline stands outside the window, where a wobble cannot bend it.
     // While its client moves it fades out quickly, and fades back in once the
     // client has settled, instead of vanishing and popping back.
-    const bool  MOVING     = window == getOverviewWindowToShow(dragActiveWindow.lock()) || window->effects().hasActiveTransformers();
+    // A group moves as one: a wobble on any member also moves the box the outline is drawn around.
+    bool groupMoving = false;
+    if (const auto GROUP = window->grouping().group())
+        for (const auto& member : GROUP->windows())
+            groupMoving = groupMoving || (member && member->effects().hasActiveTransformers());
+    const bool  MOVING     = window == getOverviewWindowToShow(dragActiveWindow.lock()) || window->effects().hasActiveTransformers() || groupMoving;
     const float MOTIONFADE = ScrollOverview::Config::getNavigatorHideOutlineInMotion() ? outlineMotionFade(MOVING) : 1.F;
     if (MOTIONFADE <= 0.01F)
         return;
